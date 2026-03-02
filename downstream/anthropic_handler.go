@@ -87,17 +87,7 @@ func (h *AnthropicHandler) proxyAndStream(c *gin.Context, body []byte) {
 }
 
 func (h *AnthropicHandler) resolveAPIKey(c *gin.Context) string {
-	auth := c.GetHeader("x-api-key")
-	if auth == "" {
-		auth = c.GetHeader("Authorization")
-	}
-	if auth == "" {
-		return h.cfg.AnthropicAPIKey
-	}
-	if len(auth) > 7 && auth[:7] == "Bearer " {
-		return auth[7:]
-	}
-	return auth
+	return h.cfg.AnthropicAPIKey
 }
 
 func (h *AnthropicHandler) streamResponse(c *gin.Context, body io.Reader) {

@@ -23,6 +23,8 @@ func main() {
 
 	r.POST("/v1/messages", downstream.NewAnthropicHandler(cfg))
 
+	r.POST("/v1/openai-to-anthropic/messages", downstream.NewOpenAIToAnthropicHandler(cfg))
+
 	addr := ":" + cfg.Port
 	logging.InfoMsg("ai-proxy server starting on %s", addr)
 	if err := r.Run(addr); err != nil {
