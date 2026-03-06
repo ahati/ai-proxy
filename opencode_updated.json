@@ -30,8 +30,11 @@
     "proxy-ai-anthropic": {
       "id": "proxy-ai-anthropic",
       "npm": "@ai-sdk/anthropic",
-      "api": "http://host.docker.internal:8080/v1",
       "name": "proxy-anthropic",
+      "options": {
+        "baseURL": "http://host.docker.internal:8080/v1",
+        "apiKey": "sk-cp-dummy"
+      },
       "models": {
         "kimi-k2.5": {
           "id": "kimi-k2.5",

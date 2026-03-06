@@ -12,8 +12,10 @@ import (
 func main() {
 	cfg := config.Load()
 	logging.Init()
+	logging.InitStorage(cfg.SSELogDir)
 
 	r := gin.Default()
+	r.Use(logging.CaptureMiddleware())
 
 	r.GET("/health", downstream.HealthCheck)
 

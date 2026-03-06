@@ -29,6 +29,15 @@ func (c *Client) BuildRequest(ctx context.Context, body []byte) (*http.Request, 
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
+
+	if cc := logging.GetCaptureContext(ctx); cc != nil {
+		cc.Recorder.UpstreamRequest = &logging.HTTPRequestCapture{
+			At:      cc.StartTime,
+			Body:    body,
+			RawBody: body,
+		}
+	}
+
 	return req, nil
 }
 
@@ -36,6 +45,10 @@ func (c *Client) SetHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Accept", "text/event-stream")
+
+	if cc := logging.GetCaptureContext(req.Context()); cc != nil && cc.Recorder.UpstreamRequest != nil {
+		cc.Recorder.UpstreamRequest.Headers = logging.SanitizeHeaders(req.Header)
+	}
 }
 
 func (c *Client) GetAPIKey(clientAuth string) string {
@@ -52,6 +65,15 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		logging.ErrorMsg("Upstream request failed: %v", err)
 		return nil, fmt.Errorf("upstream request: %w", err)
 	}
+
+	if cc := logging.GetCaptureContext(req.Context()); cc != nil {
+		cc.Recorder.UpstreamResponse = &logging.SSEResponseCapture{
+			StatusCode: resp.StatusCode,
+			Headers:    logging.SanitizeHeaders(resp.Header),
+			Chunks:     []logging.SSEChunk{},
+		}
+	}
+
 	return resp, nil
 }
 

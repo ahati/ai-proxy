@@ -249,6 +249,7 @@ func (t *OpenAIToAnthropicTransformer) sendToolUseBlock(tc OpenAIToolCall) {
 		if id == "" {
 			id = fmt.Sprintf("toolu_%d_%d", t.toolIndex, time.Now().UnixMilli())
 		}
+		logging.InfoMsg("[OpenAIToAnthropicTransformer] chat_id=%s tool_call_id=%s function=%s", t.messageID, id, name)
 		event := AnthropicEvent{
 			Type:  "content_block_start",
 			Index: intPtr(t.blockIndex),
@@ -366,6 +367,7 @@ func (t *OpenAIToAnthropicTransformer) processThinking(text string, index int) (
 			if t.needThinkingStop {
 				out = append(out, t.makeThinkingBlockStop(t.thinkingIndex))
 				t.needThinkingStop = false
+				t.blockIndex++
 			}
 
 		case oaStateInSection:
@@ -383,11 +385,13 @@ func (t *OpenAIToAnthropicTransformer) processThinking(text string, index int) (
 					t.needThinkingStop = true
 					t.buf = ""
 				}
+				logging.InfoMsg("[OpenAIToAnthropicTransformer] chat_id=%s Tool calls section ended (thinking context)", t.messageID)
 				return out, nil
 			}
 			if idx < 0 {
 				return out, nil
 			}
+			logging.InfoMsg("[OpenAIToAnthropicTransformer] chat_id=%s Tool call section begin detected (thinking context)", t.messageID)
 			t.buf = t.buf[idx+len(oaTokCallBegin):]
 			t.state = oaStateReadingID
 
@@ -399,6 +403,7 @@ func (t *OpenAIToAnthropicTransformer) processThinking(text string, index int) (
 			rawID := strings.TrimSpace(t.buf[:argIdx])
 			id := t.parseToolCallID(rawID, t.toolIndex)
 			name := t.parseFunctionName(rawID)
+			logging.InfoMsg("[OpenAIToAnthropicTransformer] chat_id=%s tool_call_id=%s function=%s (thinking context)", t.messageID, id, name)
 			t.buf = t.buf[argIdx+len(oaTokArgBegin):]
 			t.state = oaStateReadingArgs
 			out = append(out, t.makeToolUseBlockStart(id, name))
@@ -463,6 +468,7 @@ func (t *OpenAIToAnthropicTransformer) processText(text string, index int) ([][]
 			if t.needTextStop {
 				out = append(out, t.makeTextBlockStop(t.textIndex))
 				t.needTextStop = false
+				t.blockIndex++
 			}
 
 		case oaStateInSection:
@@ -480,11 +486,13 @@ func (t *OpenAIToAnthropicTransformer) processText(text string, index int) ([][]
 					t.needTextStop = true
 					t.buf = ""
 				}
+				logging.InfoMsg("[OpenAIToAnthropicTransformer] chat_id=%s Tool calls section ended (text context)", t.messageID)
 				return out, nil
 			}
 			if idx < 0 {
 				return out, nil
 			}
+			logging.InfoMsg("[OpenAIToAnthropicTransformer] chat_id=%s Tool call section begin detected (text context)", t.messageID)
 			t.buf = t.buf[idx+len(oaTokCallBegin):]
 			t.state = oaStateReadingID
 
@@ -496,6 +504,7 @@ func (t *OpenAIToAnthropicTransformer) processText(text string, index int) ([][]
 			rawID := strings.TrimSpace(t.buf[:argIdx])
 			id := t.parseToolCallID(rawID, t.toolIndex)
 			name := t.parseFunctionName(rawID)
+			logging.InfoMsg("[OpenAIToAnthropicTransformer] chat_id=%s tool_call_id=%s function=%s (text context)", t.messageID, id, name)
 			t.buf = t.buf[argIdx+len(oaTokArgBegin):]
 			t.state = oaStateReadingArgs
 			out = append(out, t.makeToolUseBlockStart(id, name))

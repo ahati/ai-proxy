@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"ai-proxy/logging"
+
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -168,11 +170,13 @@ func (t *ToolCallTransformer) processReasoning(base Chunk, text string) ([][]byt
 					out = append(out, t.makeContentChunk(base, trailing))
 					t.buf = ""
 				}
+				logging.InfoMsg("[ToolCallTransformer] chat_id=%s Tool calls section ended", base.ID)
 				return out, nil
 			}
 			if idx < 0 {
 				return out, nil
 			}
+			logging.InfoMsg("[ToolCallTransformer] chat_id=%s Tool call section begin detected", base.ID)
 			t.buf = t.buf[idx+len(tokCallBegin):]
 			t.state = stateReadingID
 
@@ -184,6 +188,7 @@ func (t *ToolCallTransformer) processReasoning(base Chunk, text string) ([][]byt
 			rawID := strings.TrimSpace(t.buf[:argIdx])
 			t.currentID, _ = parseToolCallID(rawID, t.toolIndex)
 			name := parseFunctionName(rawID)
+			logging.InfoMsg("[ToolCallTransformer] chat_id=%s tool_call_id=%s function=%s", base.ID, t.currentID, name)
 			t.buf = t.buf[argIdx+len(tokArgBegin):]
 			t.state = stateReadingArgs
 			out = append(out, t.makeToolCallHeader(base, name))

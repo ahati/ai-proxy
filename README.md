@@ -81,7 +81,7 @@ This proxy sits between your application and the Kimi-K2.5/K2 upstream API, tran
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `ANTHROPIC_UPSTREAM_URL` | `https://api.anthropic.com/v1/messages` | Anthropic upstream URL |
+| `ANTHROPIC_UPSTREAM_URL` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages` | Anthropic-compatiable upstream URL |
 | `ANTHROPIC_API_KEY` | (empty) | API key for Anthropic upstream |
 
 ### Common
@@ -105,14 +105,14 @@ UPSTREAM_API_KEY=your-key \
 ./ai-proxy
 
 # Run with Anthropic upstream
-ANTHROPIC_UPSTREAM_URL=https://api.anthropic.com/v1/messages \
+ANTHROPIC_UPSTREAM_URL=https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages \
 ANTHROPIC_API_KEY=your-anthropic-key \
 ./ai-proxy
 
 # Run with both upstreams
 UPSTREAM_URL=https://llm.chutes.ai/v1/chat/completions \
 UPSTREAM_API_KEY=your-key \
-ANTHROPIC_UPSTREAM_URL=https://api.anthropic.com/v1/messages \
+ANTHROPIC_UPSTREAM_URL=https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages \
 ANTHROPIC_API_KEY=your-anthropic-key \
 PORT=3000 \
 ./ai-proxy

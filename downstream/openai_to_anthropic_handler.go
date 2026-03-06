@@ -1,10 +1,14 @@
 package downstream
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"ai-proxy/config"
 	"ai-proxy/logging"
@@ -31,6 +35,8 @@ func (h *OpenAIToAnthropicHandler) Handle(c *gin.Context) {
 		h.sendError(c, http.StatusBadRequest, "Failed to read request body")
 		return
 	}
+
+	logging.RecordDownstreamRequest(c, body)
 
 	if !h.isStreamingRequest(body) {
 		h.sendError(c, http.StatusBadRequest, "Non-streaming requests not supported")
@@ -77,15 +83,20 @@ func (h *OpenAIToAnthropicHandler) proxyAndStream(c *gin.Context, body []byte) {
 		}
 	}
 
+	for _, h := range []string{"Connection", "Keep-Alive", "Upgrade", "TE"} {
+		if v := c.Request.Header.Get(h); v != "" {
+			req.Header.Set(h, v)
+		}
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		h.sendError(c, http.StatusBadGateway, "Upstream request failed")
 		return
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		h.handleUpstreamError(c, resp)
+		h.handleUpstreamErrorAndCapture(c, resp)
 		return
 	}
 
@@ -215,17 +226,7 @@ func (h *OpenAIToAnthropicHandler) convertTool(anthTool AnthropicToolDefinition)
 }
 
 func (h *OpenAIToAnthropicHandler) resolveAPIKey(c *gin.Context) string {
-	auth := c.GetHeader("x-api-key")
-	if auth == "" {
-		auth = c.GetHeader("Authorization")
-	}
-	if auth == "" {
-		return h.cfg.OpenAIUpstreamAPIKey
-	}
-	if len(auth) > 7 && auth[:7] == "Bearer " {
-		return auth[7:]
-	}
-	return auth
+	return h.cfg.OpenAIUpstreamAPIKey
 }
 
 func (h *OpenAIToAnthropicHandler) streamResponse(c *gin.Context, body io.Reader) {
@@ -234,38 +235,64 @@ func (h *OpenAIToAnthropicHandler) streamResponse(c *gin.Context, body io.Reader
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	var loggingTransformer *LoggingTransformer
-	if h.cfg.SSELogDir != "" {
-		var err error
-		loggingTransformer, err = NewLoggingTransformer(h.cfg.SSELogDir)
-		if err != nil {
-			logging.ErrorMsg("Failed to create logging transformer: %v", err)
+	var cc *logging.CaptureContext
+	if cc = logging.GetCaptureContext(c.Request.Context()); cc != nil {
+		startTime := cc.StartTime
+
+		downstreamCapture := logging.NewCaptureWriter(startTime)
+		upstreamCapture := logging.NewCaptureWriter(startTime)
+
+		recorder := NewResponseRecorder(c.Writer, downstreamCapture)
+		transformer := NewOpenAIToAnthropicTransformer(recorder)
+		defer transformer.Close()
+
+		c.Stream(func(w io.Writer) bool {
+			for ev, err := range sse.Read(body, nil) {
+				if err != nil {
+					logging.ErrorMsg("SSE read error: %v", err)
+					return false
+				}
+				if ev.Data != "" {
+					upstreamCapture.RecordChunk(ev.Type, []byte(ev.Data))
+				}
+				transformer.Transform(&ev)
+			}
+			return false
+		})
+
+		transformer.Flush()
+
+		cc.Recorder.DownstreamResponse = &logging.SSEResponseCapture{
+			Chunks: downstreamCapture.Chunks(),
 		}
+		if cc.Recorder.UpstreamResponse != nil {
+			cc.Recorder.UpstreamResponse.Chunks = upstreamCapture.Chunks()
+		}
+		if !cc.IDExtracted {
+			for _, chunk := range downstreamCapture.Chunks() {
+				if id := logging.ExtractRequestIDFromSSEChunk(chunk.Data); id != "" {
+					cc.SetRequestID(id)
+					break
+				}
+			}
+		}
+	} else {
+		transformer := NewOpenAIToAnthropicTransformer(c.Writer)
+		defer transformer.Close()
+
+		c.Stream(func(w io.Writer) bool {
+			for ev, err := range sse.Read(body, nil) {
+				if err != nil {
+					logging.ErrorMsg("SSE read error: %v", err)
+					return false
+				}
+				transformer.Transform(&ev)
+			}
+			return false
+		})
+
+		transformer.Flush()
 	}
-	defer func() {
-		if loggingTransformer != nil {
-			loggingTransformer.Close()
-		}
-	}()
-
-	transformer := NewOpenAIToAnthropicTransformer(c.Writer)
-	defer transformer.Close()
-
-	c.Stream(func(w io.Writer) bool {
-		for ev, err := range sse.Read(body, nil) {
-			if err != nil {
-				logging.ErrorMsg("SSE read error: %v", err)
-				return false
-			}
-			if loggingTransformer != nil {
-				loggingTransformer.Transform(&ev)
-			}
-			transformer.Transform(&ev)
-		}
-		return false
-	})
-
-	transformer.Flush()
 }
 
 func (h *OpenAIToAnthropicHandler) sendError(c *gin.Context, status int, msg string) {
@@ -279,7 +306,36 @@ func (h *OpenAIToAnthropicHandler) sendError(c *gin.Context, status int, msg str
 	})
 }
 
-func (h *OpenAIToAnthropicHandler) handleUpstreamError(c *gin.Context, resp *http.Response) {
+func (h *OpenAIToAnthropicHandler) handleUpstreamErrorAndCapture(c *gin.Context, resp *http.Response) {
 	body, _ := io.ReadAll(resp.Body)
 	c.Data(resp.StatusCode, resp.Header.Get("Content-Type"), body)
+
+	var cc *logging.CaptureContext
+	if cc = logging.GetCaptureContext(c.Request.Context()); cc != nil {
+		cc.Recorder.DownstreamResponse = &logging.SSEResponseCapture{
+			StatusCode: resp.StatusCode,
+			Headers:    logging.SanitizeHeaders(resp.Header),
+			Chunks: []logging.SSEChunk{
+				{
+					OffsetMS: logging.OffsetMS(cc.StartTime),
+					Event:    "error",
+					Data:     body,
+				},
+			},
+		}
+
+		if !cc.IDExtracted {
+			if id := logging.ExtractRequestIDFromSSEChunk(body); id != "" {
+				cc.SetRequestID(id)
+			} else {
+				fallbackID := fmt.Sprintf("err_%s_%d", h.generateErrorID(body), time.Now().UnixMilli())
+				cc.SetRequestID(fallbackID)
+			}
+		}
+	}
+}
+
+func (h *OpenAIToAnthropicHandler) generateErrorID(body []byte) string {
+	hash := sha256.Sum256(body)
+	return hex.EncodeToString(hash[:8])
 }

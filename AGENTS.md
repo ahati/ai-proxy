@@ -1,49 +1,26 @@
-# AGENTS.md - Developer Guide for This Repository
+# AGENTS.md - Developer Guide
 
-## Project Overview
-
-Go-based HTTP ai-proxy server for OpenAI-compatible LLM APIs. Proxies requests to llm.chutes.ai while exposing an OpenAI-compatible interface.
+Go-based HTTP proxy for LLM APIs with OpenAI and Anthropic compatibility.
 
 ## Build Commands
 
 ```bash
-# Build the project
-go build -o ai-proxy .
+# Build and run
+go build -o ai-proxy . && ./ai-proxy
 
-# Run the server
-./ai-proxy
-
-# Run with custom port
-PORT=8080 ./ai-proxy
-
-# Run with custom upstream URL and API key
-UPSTREAM_URL=https://llm.chutes.ai/v1/chat/completions \
-UPSTREAM_API_KEY=your-api-key \
-./ai-proxy
+# Run with environment variables
+PORT=8081 UPSTREAM_API_KEY=key ./ai-proxy
 
 # Run tests
 go test ./...
-
-# Run tests with verbose output
 go test -v ./...
-
-# Run a single test by name
 go test -v -run TestFunctionName ./...
-
-# Run tests with coverage
 go test -cover ./...
 
-# Format code
+# Format and lint
 go fmt ./...
-
-# Vet code (static analysis)
 go vet ./...
-
-# Tidy go.mod
 go mod tidy
-
-# View dependencies
-go list -m all
 ```
 
 ## Code Style Guidelines
@@ -173,6 +150,8 @@ ai-proxy/
 | GET | `/health` | Health check |
 | GET | `/v1/models` | List available models |
 | POST | `/v1/chat/completions` | Chat completions (streaming) |
+| POST | `/v1/messages` | Native Anthropic messages |
+| POST | `/v1/openai-to-anthropic/messages` | OpenAI→Anthropic bridge |
 
 ## Common Tasks
 
@@ -185,3 +164,122 @@ ai-proxy/
 
 - SSE parsing via `github.com/tmaxmax/go-sse`
 - Use `sse.Read()` in `downstream/completions.go`
+
+## Testing
+
+### Manual Testing with curl
+
+#### OpenAI Compatible Endpoint (`/v1/chat/completions`)
+
+```bash
+# Start server with logging
+PORT=8081 SSELOG_DIR=./test_logs ./ai-proxy
+
+# Basic chat request
+curl -s -X POST http://localhost:8081/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "moonshotai/Kimi-K2.5-TEE",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+
+# With tool calls
+curl -s -X POST http://localhost:8081/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "moonshotai/Kimi-K2.5-TEE",
+    "messages": [{"role": "user", "content": "List files in current directory"}],
+    "tools": [{
+      "type": "function",
+      "function": {
+        "name": "bash",
+        "description": "Execute bash commands",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {"type": "string", "description": "The bash command"}
+          },
+          "required": ["command"]
+        }
+      }
+    }],
+    "stream": true
+  }'
+```
+
+**Model**: `moonshotai/Kimi-K2.5-TEE`
+
+#### Anthropic Endpoint (`/v1/messages`)
+
+```bash
+# Start server with logging
+PORT=8081 SSELOG_DIR=./test_logs ./ai-proxy
+
+# Basic chat request
+curl -s -X POST http://localhost:8081/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Anthropic-Version: 2023-06-01" \
+  -d '{
+    "model": "kimi-k2.5",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+
+# With tool calls
+curl -s -X POST http://localhost:8081/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Anthropic-Version: 2023-06-01" \
+  -d '{
+    "model": "kimi-k2.5",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "List files using bash"}],
+    "tools": [{
+      "name": "bash",
+      "description": "Execute bash commands",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "command": {"type": "string", "description": "The bash command"}
+        },
+        "required": ["command"]
+      }
+    }],
+    "stream": true
+  }'
+```
+
+**Model**: `kimi-k2.5`
+
+### Request Capture/Logging
+
+When `SSELOG_DIR` is set, all requests are captured to structured JSON files:
+
+```bash
+# Start with logging enabled
+PORT=8081 SSELOG_DIR=./test_logs ./ai-proxy
+
+# Make requests (no X-Request-ID needed - ID extracted from SSE response)
+curl -X POST http://localhost:8081/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "moonshotai/Kimi-K2.5-TEE", "messages": [{"role": "user", "content": "test"}], "stream": true}'
+
+# Check captured logs
+ls -la test_logs/$(date +%Y-%m-%d)/
+cat test_logs/$(date +%Y-%m-%d)/*.json
+```
+
+**Captured data** (4 capture points):
+1. **Downstream TX** - Client request to proxy
+2. **Upstream TX** - Proxy request to LLM API
+3. **Upstream RX** - LLM API response to proxy
+4. **Downstream RX** - Proxy response to client
+
+**Log format**: Structured JSON with:
+- Request metadata (ID, timestamps, duration)
+- Headers (sanitized - auth masked)
+- Body (parsed JSON)
+- SSE chunks (structured JSON in `data` field, raw string in `raw` if invalid)
+
+

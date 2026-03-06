@@ -9,6 +9,7 @@ import (
 	"ai-proxy/upstream"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tmaxmax/go-sse"
 )
 
 func handler(c *gin.Context, cfg *config.Config) {
@@ -18,17 +19,12 @@ func handler(c *gin.Context, cfg *config.Config) {
 		return
 	}
 
+	logging.RecordDownstreamRequest(c, body)
+
 	proxyAndRespond(c, cfg, body)
 }
 
 func resolveAPIKey(c *gin.Context, cfg *config.Config) string {
-	auth := c.GetHeader("Authorization")
-	if auth == "" {
-		return cfg.OpenAIUpstreamAPIKey
-	}
-	if len(auth) > 7 && auth[:7] == "Bearer " {
-		return auth[7:]
-	}
 	return cfg.OpenAIUpstreamAPIKey
 }
 
@@ -50,35 +46,66 @@ func proxyAndRespond(c *gin.Context, cfg *config.Config, body []byte) {
 		}
 	}
 
+	for _, h := range []string{"Connection", "Keep-Alive", "Upgrade", "TE"} {
+		if v := c.Request.Header.Get(h); v != "" {
+			req.Header.Set(h, v)
+		}
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		sendError(c, http.StatusBadGateway, "Upstream request failed", "")
 		return
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		handleUpstreamError(c, resp)
 		return
 	}
 
-	toolCallTransformer := NewToolCallTransformer(c.Writer)
+	var cc *logging.CaptureContext
+	if cc = logging.GetCaptureContext(c.Request.Context()); cc != nil {
+		startTime := cc.StartTime
 
-	var loggingTransformer *LoggingTransformer
-	if cfg.SSELogDir != "" {
-		var err error
-		loggingTransformer, err = NewLoggingTransformer(cfg.SSELogDir)
-		if err != nil {
-			logging.ErrorMsg("Failed to create logging transformer: %v", err)
+		downstreamCapture := logging.NewCaptureWriter(startTime)
+		upstreamCapture := logging.NewCaptureWriter(startTime)
+
+		recorder := NewResponseRecorder(c.Writer, downstreamCapture)
+		toolCallTransformer := NewToolCallTransformer(recorder)
+
+		c.Stream(func(w io.Writer) bool {
+			for ev, err := range sse.Read(resp.Body, nil) {
+				if err != nil {
+					return false
+				}
+				if ev.Data != "" {
+					upstreamCapture.RecordChunk(ev.Type, []byte(ev.Data))
+				}
+				toolCallTransformer.Transform(&ev)
+			}
+			return false
+		})
+
+		toolCallTransformer.Close()
+
+		cc.Recorder.DownstreamResponse = &logging.SSEResponseCapture{
+			Chunks: downstreamCapture.Chunks(),
 		}
+		if cc.Recorder.UpstreamResponse != nil {
+			cc.Recorder.UpstreamResponse.Chunks = upstreamCapture.Chunks()
+		}
+		if !cc.IDExtracted {
+			for _, chunk := range downstreamCapture.Chunks() {
+				if id := logging.ExtractRequestIDFromSSEChunk(chunk.Data); id != "" {
+					cc.SetRequestID(id)
+					break
+				}
+			}
+		}
+	} else {
+		toolCallTransformer := NewToolCallTransformer(c.Writer)
+		streamResponse(c, resp.Body, toolCallTransformer)
 	}
-	defer func() {
-		if loggingTransformer != nil {
-			loggingTransformer.Close()
-		}
-	}()
-
-	streamResponse(c, resp.Body, loggingTransformer, toolCallTransformer)
 }
 
 func readBody(c *gin.Context) ([]byte, error) {

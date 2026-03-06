@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ai-proxy/logging"
+
 	"github.com/tmaxmax/go-sse"
 )
 
@@ -49,6 +50,7 @@ type AnthropicToolCallTransformer struct {
 	needThinkingStop bool
 	needTextStop     bool
 	processAsText    bool
+	toolsEmitted     bool
 }
 
 func NewAnthropicToolCallTransformer(output io.Writer) *AnthropicToolCallTransformer {
@@ -78,7 +80,9 @@ func (t *AnthropicToolCallTransformer) Transform(event *sse.Event) {
 		t.handleContentBlockDelta(&anthropicEvent)
 	case "content_block_stop":
 		t.handleContentBlockStop(&anthropicEvent)
-	case "message_delta", "message_stop", "ping":
+	case "message_delta":
+		t.handleMessageDelta(&anthropicEvent)
+	case "message_stop", "ping":
 		t.writeEvent(&anthropicEvent)
 	default:
 		t.writeEvent(&anthropicEvent)
@@ -217,6 +221,23 @@ func (t *AnthropicToolCallTransformer) handleContentBlockStop(event *AnthropicEv
 	t.writeEvent(event)
 }
 
+func (t *AnthropicToolCallTransformer) handleMessageDelta(event *AnthropicEvent) {
+	if t.toolsEmitted && event.Delta != nil {
+		var delta struct {
+			StopReason   string  `json:"stop_reason,omitempty"`
+			StopSequence *string `json:"stop_sequence,omitempty"`
+		}
+		if err := json.Unmarshal(event.Delta, &delta); err == nil {
+			if delta.StopReason == "end_turn" {
+				delta.StopReason = "tool_use"
+				deltaJSON, _ := json.Marshal(delta)
+				event.Delta = deltaJSON
+			}
+		}
+	}
+	t.writeEvent(event)
+}
+
 func (t *AnthropicToolCallTransformer) processThinking(text string, index int) ([][]byte, error) {
 	t.buf += text
 	var out [][]byte
@@ -253,11 +274,13 @@ func (t *AnthropicToolCallTransformer) processThinking(text string, index int) (
 					t.needThinkingStop = true
 					t.buf = ""
 				}
+				logging.InfoMsg("[AnthropicToolCallTransformer] chat_id=%s Tool calls section ended", t.messageID)
 				return out, nil
 			}
 			if idx < 0 {
 				return out, nil
 			}
+			logging.InfoMsg("[AnthropicToolCallTransformer] chat_id=%s Tool call section begin detected", t.messageID)
 			t.buf = t.buf[idx+len(anthropicTokCallBegin):]
 			t.state = anthropicStateReadingID
 
@@ -269,8 +292,10 @@ func (t *AnthropicToolCallTransformer) processThinking(text string, index int) (
 			rawID := strings.TrimSpace(t.buf[:argIdx])
 			t.currentID = t.parseToolCallID(rawID, t.toolIndex)
 			name := t.parseFunctionName(rawID)
+			logging.InfoMsg("[AnthropicToolCallTransformer] chat_id=%s tool_call_id=%s function=%s", t.messageID, t.currentID, name)
 			t.buf = t.buf[argIdx+len(anthropicTokArgBegin):]
 			t.state = anthropicStateReadingArgs
+			t.blockIndex++
 			out = append(out, t.makeToolUseBlockStart(name))
 
 		case anthropicStateReadingArgs:
@@ -289,7 +314,6 @@ func (t *AnthropicToolCallTransformer) processThinking(text string, index int) (
 			out = append(out, t.makeContentBlockStop())
 			t.buf = t.buf[endIdx+len(anthropicTokCallEnd):]
 			t.toolIndex++
-			t.blockIndex++
 			t.state = anthropicStateInSection
 
 		case anthropicStateTrailing:
@@ -329,6 +353,7 @@ func (t *AnthropicToolCallTransformer) processText(text string, index int) ([][]
 			if t.needTextStop {
 				out = append(out, t.makeTextBlockStop(t.textIndex))
 				t.needTextStop = false
+				t.blockIndex++
 			}
 
 		case anthropicStateInSection:
@@ -346,11 +371,13 @@ func (t *AnthropicToolCallTransformer) processText(text string, index int) ([][]
 					t.needTextStop = true
 					t.buf = ""
 				}
+				logging.InfoMsg("[AnthropicToolCallTransformer] chat_id=%s Tool calls section ended (text context)", t.messageID)
 				return out, nil
 			}
 			if idx < 0 {
 				return out, nil
 			}
+			logging.InfoMsg("[AnthropicToolCallTransformer] chat_id=%s Tool call section begin detected (text context)", t.messageID)
 			t.buf = t.buf[idx+len(anthropicTokCallBegin):]
 			t.state = anthropicStateReadingID
 
@@ -362,8 +389,10 @@ func (t *AnthropicToolCallTransformer) processText(text string, index int) ([][]
 			rawID := strings.TrimSpace(t.buf[:argIdx])
 			t.currentID = t.parseToolCallID(rawID, t.toolIndex)
 			name := t.parseFunctionName(rawID)
+			logging.InfoMsg("[AnthropicToolCallTransformer] chat_id=%s tool_call_id=%s function=%s (text context)", t.messageID, t.currentID, name)
 			t.buf = t.buf[argIdx+len(anthropicTokArgBegin):]
 			t.state = anthropicStateReadingArgs
+			t.blockIndex++
 			out = append(out, t.makeToolUseBlockStart(name))
 
 		case anthropicStateReadingArgs:
@@ -382,7 +411,6 @@ func (t *AnthropicToolCallTransformer) processText(text string, index int) ([][]
 			out = append(out, t.makeContentBlockStop())
 			t.buf = t.buf[endIdx+len(anthropicTokCallEnd):]
 			t.toolIndex++
-			t.blockIndex++
 			t.state = anthropicStateInSection
 
 		case anthropicStateTrailing:
@@ -476,6 +504,7 @@ func (t *AnthropicToolCallTransformer) makeTextBlockStop(index int) []byte {
 }
 
 func (t *AnthropicToolCallTransformer) makeToolUseBlockStart(name string) []byte {
+	t.toolsEmitted = true
 	toolBlock := AnthropicContentBlock{
 		Type:  "tool_use",
 		ID:    t.currentID,
@@ -575,10 +604,93 @@ func (t *AnthropicToolCallTransformer) parseFunctionName(raw string) string {
 	return raw
 }
 
-func (t *AnthropicToolCallTransformer) Close() {}
+func (t *AnthropicToolCallTransformer) Close() {
+	t.Flush()
+}
 
 func (t *AnthropicToolCallTransformer) Flush() {
-	if t.buf != "" && t.inThinking {
-		logging.ErrorMsg("Anthropic transformer: unflushed buffer on close")
+	// Flush any remaining buffered content to ensure incomplete tool calls are logged
+	if t.buf == "" {
+		return
 	}
+
+	// Log warning about unflushed buffer - this indicates malformed or incomplete tool calls
+	logging.ErrorMsg("Anthropic transformer: flushing unprocessed buffer (incomplete/malformed tool call): %q", t.buf)
+
+	// Flush remaining buffer content based on current state and context
+	if t.inThinking {
+		// In thinking block - flush as thinking_delta
+		t.flushRemainingThinking(t.thinkingIndex)
+	} else if t.inText {
+		// In text block - flush as text_delta
+		t.flushRemainingText(t.textIndex)
+	} else {
+		// Not in any block - need to create appropriate context based on state
+		switch t.state {
+		case anthropicStateIdle, anthropicStateTrailing:
+			// Regular text content outside tool section - wrap in thinking if we were in thinking
+			if t.thinkingIndex >= 0 {
+				t.thinkingIndex = t.blockIndex
+				t.blockIndex++
+				t.writeEvent(&AnthropicEvent{
+					Type:  "content_block_start",
+					Index: intPtr(t.thinkingIndex),
+					ContentBlock: mustMarshal(AnthropicContentBlock{
+						Type:     "thinking",
+						Thinking: "",
+					}),
+				})
+				t.flushRemainingThinking(t.thinkingIndex)
+				t.writeEvent(&AnthropicEvent{
+					Type:  "content_block_stop",
+					Index: intPtr(t.thinkingIndex),
+				})
+			} else {
+				// No context - create a new thinking block
+				t.thinkingIndex = t.blockIndex
+				t.blockIndex++
+				t.writeEvent(&AnthropicEvent{
+					Type:  "content_block_start",
+					Index: intPtr(t.thinkingIndex),
+					ContentBlock: mustMarshal(AnthropicContentBlock{
+						Type:     "thinking",
+						Thinking: "",
+					}),
+				})
+				t.flushRemainingThinking(t.thinkingIndex)
+				t.writeEvent(&AnthropicEvent{
+					Type:  "content_block_stop",
+					Index: intPtr(t.thinkingIndex),
+				})
+			}
+		case anthropicStateInSection, anthropicStateReadingID, anthropicStateReadingArgs:
+			// In the middle of parsing a tool call - flush as partial thinking content
+			// This captures malformed/incomplete tool calls for debugging
+			t.thinkingIndex = t.blockIndex
+			t.blockIndex++
+			t.writeEvent(&AnthropicEvent{
+				Type:  "content_block_start",
+				Index: intPtr(t.thinkingIndex),
+				ContentBlock: mustMarshal(AnthropicContentBlock{
+					Type:     "thinking",
+					Thinking: "",
+				}),
+			})
+			// Include state info in the flushed content for debugging
+			debugContent := fmt.Sprintf("[INCOMPLETE TOOL CALL - state=%d] %s", t.state, t.buf)
+			event := AnthropicEvent{
+				Type:  "content_block_delta",
+				Index: intPtr(t.thinkingIndex),
+				Delta: []byte(fmt.Sprintf(`{"type": "thinking_delta", "thinking": %q}`, debugContent)),
+			}
+			t.writeEvent(&event)
+			t.writeEvent(&AnthropicEvent{
+				Type:  "content_block_stop",
+				Index: intPtr(t.thinkingIndex),
+			})
+		}
+	}
+
+	// Clear the buffer after flushing
+	t.buf = ""
 }

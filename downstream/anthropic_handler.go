@@ -32,6 +32,8 @@ func (h *AnthropicHandler) Handle(c *gin.Context) {
 		return
 	}
 
+	logging.RecordDownstreamRequest(c, body)
+
 	if !h.isStreamingRequest(body) {
 		h.sendError(c, http.StatusBadRequest, "Non-streaming requests not supported")
 		return
@@ -71,12 +73,17 @@ func (h *AnthropicHandler) proxyAndStream(c *gin.Context, body []byte) {
 		}
 	}
 
+	for _, h := range []string{"Connection", "Keep-Alive", "Upgrade", "TE"} {
+		if v := c.Request.Header.Get(h); v != "" {
+			req.Header.Set(h, v)
+		}
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		h.sendError(c, http.StatusBadGateway, "Upstream request failed")
 		return
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		h.handleUpstreamError(c, resp)
@@ -96,38 +103,64 @@ func (h *AnthropicHandler) streamResponse(c *gin.Context, body io.Reader) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	var loggingTransformer *LoggingTransformer
-	if h.cfg.SSELogDir != "" {
-		var err error
-		loggingTransformer, err = NewLoggingTransformer(h.cfg.SSELogDir)
-		if err != nil {
-			logging.ErrorMsg("Failed to create logging transformer: %v", err)
+	var cc *logging.CaptureContext
+	if cc = logging.GetCaptureContext(c.Request.Context()); cc != nil {
+		startTime := cc.StartTime
+
+		downstreamCapture := logging.NewCaptureWriter(startTime)
+		upstreamCapture := logging.NewCaptureWriter(startTime)
+
+		recorder := NewResponseRecorder(c.Writer, downstreamCapture)
+		transformer := NewAnthropicToolCallTransformer(recorder)
+		defer transformer.Close()
+
+		c.Stream(func(w io.Writer) bool {
+			for ev, err := range sse.Read(body, nil) {
+				if err != nil {
+					logging.ErrorMsg("SSE read error: %v", err)
+					return false
+				}
+				if ev.Data != "" {
+					upstreamCapture.RecordChunk(ev.Type, []byte(ev.Data))
+				}
+				transformer.Transform(&ev)
+			}
+			return false
+		})
+
+		transformer.Flush()
+
+		cc.Recorder.DownstreamResponse = &logging.SSEResponseCapture{
+			Chunks: downstreamCapture.Chunks(),
 		}
+		if cc.Recorder.UpstreamResponse != nil {
+			cc.Recorder.UpstreamResponse.Chunks = upstreamCapture.Chunks()
+		}
+		if !cc.IDExtracted {
+			for _, chunk := range downstreamCapture.Chunks() {
+				if id := logging.ExtractRequestIDFromSSEChunk(chunk.Data); id != "" {
+					cc.SetRequestID(id)
+					break
+				}
+			}
+		}
+	} else {
+		transformer := NewAnthropicToolCallTransformer(c.Writer)
+		defer transformer.Close()
+
+		c.Stream(func(w io.Writer) bool {
+			for ev, err := range sse.Read(body, nil) {
+				if err != nil {
+					logging.ErrorMsg("SSE read error: %v", err)
+					return false
+				}
+				transformer.Transform(&ev)
+			}
+			return false
+		})
+
+		transformer.Flush()
 	}
-	defer func() {
-		if loggingTransformer != nil {
-			loggingTransformer.Close()
-		}
-	}()
-
-	transformer := NewAnthropicToolCallTransformer(c.Writer)
-	defer transformer.Close()
-
-	c.Stream(func(w io.Writer) bool {
-		for ev, err := range sse.Read(body, nil) {
-			if err != nil {
-				logging.ErrorMsg("SSE read error: %v", err)
-				return false
-			}
-			if loggingTransformer != nil {
-				loggingTransformer.Transform(&ev)
-			}
-			transformer.Transform(&ev)
-		}
-		return false
-	})
-
-	transformer.Flush()
 }
 
 func (h *AnthropicHandler) sendError(c *gin.Context, status int, msg string) {

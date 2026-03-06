@@ -646,3 +646,331 @@ func TestAnthropicToolCallTransformer_MultipleThinkingBlocks(t *testing.T) {
 		t.Errorf("Expected text response")
 	}
 }
+
+func TestAnthropicToolCallTransformer_BlockIndicesAfterThinkingClose(t *testing.T) {
+	var output bytes.Buffer
+	transformer := NewAnthropicToolCallTransformer(&output)
+
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_88fc2593","type":"message","role":"assistant","content":[],"model":"kimi-k2.5"}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_calls_section_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"function.bash:9"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_argument_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"{\"command\": \"ls /usr/include\"}"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"function.bash:10"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_argument_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"{\"command\": \"ls /usr/include/arpa/\"}"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"function.bash:11"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_argument_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"{\"command\": \"ls /usr/include/openssl/\"}"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_calls_section_end|>"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":50}}`,
+		`{"type":"message_stop"}`,
+	}
+
+	for _, data := range events {
+		transformer.Transform(&sse.Event{Data: data})
+	}
+
+	result := output.String()
+
+	type BlockStartEvent struct {
+		Type         string          `json:"type"`
+		Index        int             `json:"index"`
+		ContentBlock json.RawMessage `json:"content_block"`
+	}
+
+	var thinkingBlocks []BlockStartEvent
+	var toolUseBlocks []BlockStartEvent
+
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, `"type":"content_block_start"`) {
+			if strings.HasPrefix(line, "data: ") {
+				jsonStr := strings.TrimPrefix(line, "data: ")
+				var event BlockStartEvent
+				if err := json.Unmarshal([]byte(jsonStr), &event); err == nil {
+					var cb struct {
+						Type string `json:"type"`
+					}
+					json.Unmarshal(event.ContentBlock, &cb)
+					if cb.Type == "thinking" {
+						thinkingBlocks = append(thinkingBlocks, event)
+					} else if cb.Type == "tool_use" {
+						toolUseBlocks = append(toolUseBlocks, event)
+					}
+				}
+			}
+		}
+	}
+
+	if len(thinkingBlocks) != 1 {
+		t.Errorf("Expected 1 thinking block, got %d", len(thinkingBlocks))
+	}
+	if len(thinkingBlocks) > 0 && thinkingBlocks[0].Index != 0 {
+		t.Errorf("Thinking block expected index 0, got %d", thinkingBlocks[0].Index)
+	}
+
+	if len(toolUseBlocks) != 3 {
+		t.Errorf("Expected 3 tool_use blocks, got %d. Output:\n%s", len(toolUseBlocks), result)
+	}
+
+	expectedToolIndices := []int{1, 2, 3}
+	for i, block := range toolUseBlocks {
+		if i < len(expectedToolIndices) && block.Index != expectedToolIndices[i] {
+			t.Errorf("Tool_use block %d: expected index %d, got %d", i, expectedToolIndices[i], block.Index)
+		}
+	}
+
+	seenIndices := make(map[int]bool)
+	for _, block := range thinkingBlocks {
+		if seenIndices[block.Index] {
+			t.Errorf("Duplicate block index detected: %d", block.Index)
+		}
+		seenIndices[block.Index] = true
+	}
+	for _, block := range toolUseBlocks {
+		if seenIndices[block.Index] {
+			t.Errorf("Duplicate block index detected: %d", block.Index)
+		}
+		seenIndices[block.Index] = true
+	}
+
+	t.Logf("Thinking blocks: %+v", thinkingBlocks)
+	t.Logf("Tool use blocks: %+v", toolUseBlocks)
+}
+
+func TestAnthropicToolCallTransformer_StopReasonTransformation(t *testing.T) {
+	var output bytes.Buffer
+	transformer := NewAnthropicToolCallTransformer(&output)
+
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"kimi-k2.5"}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_calls_section_begin|><|tool_call_begin|>bash:1<|tool_call_argument_begin|>{\"cmd\": \"ls\"}<|tool_call_end|><|tool_calls_section_end|>"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":100,"output_tokens":50}}`,
+		`{"type":"message_stop"}`,
+	}
+
+	for _, data := range events {
+		transformer.Transform(&sse.Event{Data: data})
+	}
+
+	result := output.String()
+
+	var messageDelta struct {
+		Type  string `json:"type"`
+		Delta struct {
+			StopReason string `json:"stop_reason"`
+		} `json:"delta"`
+	}
+
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "data: ") && strings.Contains(line, "message_delta") {
+			jsonStr := strings.TrimPrefix(line, "data: ")
+			if err := json.Unmarshal([]byte(jsonStr), &messageDelta); err == nil {
+				if messageDelta.Delta.StopReason != "tool_use" {
+					t.Errorf("Expected stop_reason 'tool_use' after tool calls, got '%s'. Full output:\n%s", messageDelta.Delta.StopReason, result)
+				}
+			}
+		}
+	}
+
+	if !strings.Contains(result, "tool_use") {
+		t.Errorf("Expected tool_use in output. Got:\n%s", result)
+	}
+}
+
+func TestAnthropicToolCallTransformer_NoStopReasonChangeWithoutTools(t *testing.T) {
+	var output bytes.Buffer
+	transformer := NewAnthropicToolCallTransformer(&output)
+
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"kimi-k2.5"}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think about this"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+		`{"type":"message_stop"}`,
+	}
+
+	for _, data := range events {
+		transformer.Transform(&sse.Event{Data: data})
+	}
+
+	result := output.String()
+
+	if !strings.Contains(result, `"stop_reason":"end_turn"`) {
+		t.Errorf("Expected stop_reason to remain 'end_turn' without tool calls. Got:\n%s", result)
+	}
+}
+
+func TestAnthropicToolCallTransformer_KimiK25RealLogScenario(t *testing.T) {
+	var output bytes.Buffer
+	transformer := NewAnthropicToolCallTransformer(&output)
+
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_56bf2f37-672f-4a3d-b3ff-b2b96fc7875e","type":"message","role":"assistant","content":[],"model":"kimi-k2.5","usage":{"input_tokens":0,"output_tokens":0}}}`,
+		`{"type":"ping"}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_calls_section_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"function.bash:5"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_argument_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"{\"command\": \"ls /usr/include/sys/*.h 2>/dev/null | head -50\", \"description\": \"List sys headers\"}"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"function.bash:6"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_argument_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"{\"command\": \"ls /usr/include/pthread.h 2>/dev/null && ls /usr/include/unistd.h 2>/dev/null\", \"description\": \"Check for key POSIX headers\"}"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_calls_section_end|>"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":6188,"output_tokens":113}}`,
+		`{"type":"message_stop"}`,
+	}
+
+	for _, data := range events {
+		transformer.Transform(&sse.Event{Data: data})
+	}
+
+	result := output.String()
+
+	type BlockStart struct {
+		Type  string `json:"type"`
+		Index int    `json:"index"`
+	}
+
+	var blockStarts []BlockStart
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, `"type":"content_block_start"`) && strings.HasPrefix(line, "data: ") {
+			jsonStr := strings.TrimPrefix(line, "data: ")
+			var event struct {
+				Type  string `json:"type"`
+				Index int    `json:"index"`
+			}
+			if err := json.Unmarshal([]byte(jsonStr), &event); err == nil {
+				blockStarts = append(blockStarts, event)
+			}
+		}
+	}
+
+	t.Logf("Block starts: %+v", blockStarts)
+
+	if len(blockStarts) < 3 {
+		t.Fatalf("Expected at least 3 block starts (1 thinking + 2 tool_use), got %d. Output:\n%s", len(blockStarts), result)
+	}
+
+	seenIndices := make(map[int]bool)
+	for _, block := range blockStarts {
+		if seenIndices[block.Index] {
+			t.Errorf("DUPLICATE block index %d detected! This violates Anthropic protocol. Full output:\n%s", block.Index, result)
+		}
+		seenIndices[block.Index] = true
+	}
+
+	expectedIndices := []int{0, 1, 2}
+	for i, idx := range expectedIndices {
+		if i < len(blockStarts) && blockStarts[i].Index != idx {
+			t.Errorf("Block %d: expected index %d, got %d. Output:\n%s", i, idx, blockStarts[i].Index, result)
+		}
+	}
+
+	var stopReason string
+	for _, line := range lines {
+		if strings.Contains(line, `"stop_reason"`) && strings.HasPrefix(line, "data: ") {
+			jsonStr := strings.TrimPrefix(line, "data: ")
+			var msg struct {
+				Delta struct {
+					StopReason string `json:"stop_reason"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(jsonStr), &msg); err == nil {
+				stopReason = msg.Delta.StopReason
+			}
+		}
+	}
+
+	if stopReason != "tool_use" {
+		t.Errorf("Expected stop_reason 'tool_use', got '%s'. Output:\n%s", stopReason, result)
+	}
+
+	toolUseCount := strings.Count(result, `"type":"tool_use"`)
+	if toolUseCount != 2 {
+		t.Errorf("Expected 2 tool_use blocks, got %d. Output:\n%s", toolUseCount, result)
+	}
+}
+
+func TestAnthropicToolCallTransformer_ThreeToolCallsSequential(t *testing.T) {
+	var output bytes.Buffer
+	transformer := NewAnthropicToolCallTransformer(&output)
+
+	events := []string{
+		`{"type":"message_start","message":{"id":"msg_test","type":"message","role":"assistant","content":[],"model":"kimi-k2.5"}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_calls_section_begin|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>bash:1<|tool_call_argument_begin|>{\"cmd\": \"cmd1\"}<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>bash:2<|tool_call_argument_begin|>{\"cmd\": \"cmd2\"}<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_call_begin|>bash:3<|tool_call_argument_begin|>{\"cmd\": \"cmd3\"}<|tool_call_end|>"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"<|tool_calls_section_end|>"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`,
+		`{"type":"message_stop"}`,
+	}
+
+	for _, data := range events {
+		transformer.Transform(&sse.Event{Data: data})
+	}
+
+	result := output.String()
+
+	toolUseCount := strings.Count(result, `"type":"tool_use"`)
+	if toolUseCount != 3 {
+		t.Errorf("Expected 3 tool_use blocks, got %d. Output:\n%s", toolUseCount, result)
+	}
+
+	var indices []int
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, `"type":"content_block_start"`) && strings.Contains(line, `"type":"tool_use"`) {
+			jsonStr := strings.TrimPrefix(line, "data: ")
+			var event struct {
+				Index int `json:"index"`
+			}
+			if err := json.Unmarshal([]byte(jsonStr), &event); err == nil {
+				indices = append(indices, event.Index)
+			}
+		}
+	}
+
+	t.Logf("Tool use indices: %v", indices)
+
+	if len(indices) != 3 {
+		t.Fatalf("Expected 3 tool_use block indices, got %d", len(indices))
+	}
+
+	for i := 0; i < len(indices)-1; i++ {
+		if indices[i] >= indices[i+1] {
+			t.Errorf("Tool indices not strictly increasing: %v", indices)
+		}
+	}
+
+	seen := make(map[int]bool)
+	for _, idx := range indices {
+		if seen[idx] {
+			t.Errorf("Duplicate tool index: %d", idx)
+		}
+		seen[idx] = true
+	}
+}
