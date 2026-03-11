@@ -10,21 +10,26 @@ import (
 	"ai-proxy/logging"
 )
 
-type Client struct {
+type Client interface {
+	Do(ctx context.Context, req *http.Request) (*http.Response, error)
+	Close()
+}
+
+type HTTPClient struct {
 	URL    string
 	APIKey string
 	Client *http.Client
 }
 
-func NewClient(url, apiKey string) *Client {
-	return &Client{
+func NewClient(url, apiKey string) *HTTPClient {
+	return &HTTPClient{
 		URL:    url,
 		APIKey: apiKey,
 		Client: &http.Client{Timeout: 0},
 	}
 }
 
-func (c *Client) BuildRequest(ctx context.Context, body []byte) (*http.Request, error) {
+func (c *HTTPClient) BuildRequest(ctx context.Context, body []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", c.URL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -41,7 +46,7 @@ func (c *Client) BuildRequest(ctx context.Context, body []byte) (*http.Request, 
 	return req, nil
 }
 
-func (c *Client) SetHeaders(req *http.Request) {
+func (c *HTTPClient) SetHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Accept", "text/event-stream")
@@ -51,22 +56,22 @@ func (c *Client) SetHeaders(req *http.Request) {
 	}
 }
 
-func (c *Client) GetAPIKey(clientAuth string) string {
+func (c *HTTPClient) GetAPIKey(clientAuth string) string {
 	if strings.HasPrefix(clientAuth, "Bearer ") {
 		return strings.TrimPrefix(clientAuth, "Bearer ")
 	}
 	return c.APIKey
 }
 
-func (c *Client) Do(req *http.Request) (*http.Response, error) {
+func (c *HTTPClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
 	logging.InfoMsg("Sending request to upstream: %s", c.URL)
-	resp, err := c.Client.Do(req)
+	resp, err := c.Client.Do(req.WithContext(ctx))
 	if err != nil {
 		logging.ErrorMsg("Upstream request failed: %v", err)
 		return nil, fmt.Errorf("upstream request: %w", err)
 	}
 
-	if cc := logging.GetCaptureContext(req.Context()); cc != nil {
+	if cc := logging.GetCaptureContext(ctx); cc != nil {
 		cc.Recorder.UpstreamResponse = &logging.SSEResponseCapture{
 			StatusCode: resp.StatusCode,
 			Headers:    logging.SanitizeHeaders(resp.Header),
@@ -77,6 +82,6 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-func (c *Client) Close() {
+func (c *HTTPClient) Close() {
 	c.Client.CloseIdleConnections()
 }

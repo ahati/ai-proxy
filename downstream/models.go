@@ -45,7 +45,7 @@ func ListModels(cfg *config.Config) gin.HandlerFunc {
 
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 
-		resp, err := client.Do(req)
+		resp, err := client.Do(c.Request.Context(), req)
 		if err != nil {
 			c.JSON(http.StatusBadGateway, gin.H{
 				"error": gin.H{"message": "Upstream request failed", "type": "upstream_error"},
