@@ -7,7 +7,6 @@ import (
 
 	"ai-proxy/config"
 	"ai-proxy/transform"
-	"ai-proxy/transform/toolcall"
 
 	"github.com/gin-gonic/gin"
 )
@@ -117,18 +116,21 @@ func (h *MessagesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
 	}
 }
 
-// CreateTransformer builds an Anthropic SSE transformer for the response stream.
-// The transformer handles tool use processing and Anthropic SSE event formatting.
+// CreateTransformer builds a passthrough SSE transformer for the response stream.
+// The upstream returns Anthropic-format events which should be passed through unchanged.
 //
 // @param w - Writer to receive transformed output.
-// @return Transformer for processing Anthropic-format SSE events.
+// @return Transformer for passing through SSE events unchanged.
 //
 // @pre w != nil and ready to receive writes.
 // @post Caller must call Close() on returned transformer.
+//
+// @note Uses PassthroughTransformer because Anthropic upstream already returns
+//
+//	Anthropic-format events that should be passed through unchanged.
 func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransformer {
-	// Create transformer for Anthropic format output
-	// Empty prefix strings indicate no additional ID prefix needed
-	return toolcall.NewAnthropicTransformer(w, "", "")
+	// Use passthrough transformer - upstream is already Anthropic format
+	return transform.NewPassthroughTransformer(w)
 }
 
 // WriteError sends an error response in Anthropic format.
