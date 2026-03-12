@@ -57,11 +57,24 @@ type ProtocolAdapter interface {
 // @invariant output != nil when transformer is initialized
 // @invariant writer != nil when transformer is initialized
 type ToolCallTransformer struct {
-	parser  *toolcall.Parser
-	output  toolcall.EventHandler
-	writer  io.Writer
-	base    types.StreamChunk
+	// parser extracts tool calls from text content using special markers
+	parser *toolcall.Parser
+	// output receives tool call events for format-specific emission
+	output toolcall.EventHandler
+	// writer is the destination for transformed SSE output
+	writer io.Writer
+	// base provides context (ID, model) for output chunks
+	base types.StreamChunk
+	// flusher is optional interface for flushing output handler
 	flusher interface{ Flush() }
+	// activeToolIdx tracks the index of the currently active tool call
+	activeToolIdx int
+	// toolCallActive indicates whether a tool call is currently being streamed
+	toolCallActive bool
+	// activeToolID stores the ID of the current tool call
+	activeToolID string
+	// activeToolName stores the function name of the current tool call
+	activeToolName string
 }
 
 // NewToolCallTransformer creates a new tool call transformer.
@@ -78,9 +91,11 @@ func NewToolCallTransformer(writer io.Writer, base types.StreamChunk, output too
 	// DefaultTokenSet provides the standard markers for tool call detection
 	tokens := toolcall.DefaultTokenSet()
 	t := &ToolCallTransformer{
-		output: output,
-		writer: writer,
-		base:   base,
+		output:         output,
+		writer:         writer,
+		base:           base,
+		activeToolIdx:  -1,
+		toolCallActive: false,
 	}
 	// Parser feeds extracted tool calls to the output handler
 	t.parser = toolcall.NewParser(tokens, output)
@@ -99,6 +114,7 @@ func NewToolCallTransformer(writer io.Writer, base types.StreamChunk, output too
 // @note     Skips empty data or "[DONE]" markers (passes [DONE] through).
 // @note     Extracts text from Content, Reasoning, or ReasoningContent fields.
 // @note     Forwards tool_calls directly from delta to output handler.
+// @note     Tracks active tool calls to avoid duplicate start/end events.
 func (t *ToolCallTransformer) Transform(event *sse.Event) {
 	// Skip empty data lines or the final [DONE] marker
 	// The [DONE] marker signals end of stream and needs to be forwarded to client
@@ -139,14 +155,24 @@ func (t *ToolCallTransformer) Transform(event *sse.Event) {
 		// Handle tool calls that are already structured in the delta (not in text)
 		// Some upstream APIs send tool calls directly instead of as text markers
 		for _, tc := range delta.ToolCalls {
-			// Emit tool call start event with ID, name, and index for tracking
-			t.output.OnToolCallStart(tc.ID, tc.Function.Name, tc.Index)
+			// Close previous tool call if index changed
+			// This handles the case where multiple tool calls are in the same stream
+			if t.toolCallActive && t.activeToolIdx != tc.Index {
+				t.output.OnToolCallEnd(t.activeToolIdx)
+				t.toolCallActive = false
+			}
+			// Start new tool call if not already active or if index changed
+			if !t.toolCallActive || t.activeToolIdx != tc.Index {
+				t.output.OnToolCallStart(tc.ID, tc.Function.Name, tc.Index)
+				t.activeToolIdx = tc.Index
+				t.activeToolID = tc.ID
+				t.activeToolName = tc.Function.Name
+				t.toolCallActive = true
+			}
+			// Emit arguments incrementally as they arrive in the stream
 			if tc.Function.Arguments != "" {
-				// Emit arguments incrementally as they arrive in the stream
 				t.output.OnToolCallArgs(tc.Function.Arguments, tc.Index)
 			}
-			// Signal end of this tool call delta chunk (not necessarily the full call)
-			t.output.OnToolCallEnd(tc.Index)
 		}
 	}
 }
@@ -169,7 +195,14 @@ func (t *ToolCallTransformer) Flush() {
 //
 // @brief    Closes the transformer and flushes buffers.
 //
-// @note     Equivalent to calling Flush().
+// @note     Closes any active tool call before flushing.
+// @note     Equivalent to calling Flush() after closing active tool call.
 func (t *ToolCallTransformer) Close() {
+	// Close any active tool call that wasn't explicitly closed
+	// This ensures proper content_block_stop event is emitted
+	if t.toolCallActive {
+		t.output.OnToolCallEnd(t.activeToolIdx)
+		t.toolCallActive = false
+	}
 	t.Flush()
 }
