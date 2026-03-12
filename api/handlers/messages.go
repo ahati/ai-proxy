@@ -7,6 +7,7 @@ import (
 
 	"ai-proxy/config"
 	"ai-proxy/transform"
+	"ai-proxy/transform/toolcall"
 
 	"github.com/gin-gonic/gin"
 )
@@ -116,21 +117,22 @@ func (h *MessagesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
 	}
 }
 
-// CreateTransformer builds a passthrough SSE transformer for the response stream.
-// The upstream returns Anthropic-format events which should be passed through unchanged.
+// CreateTransformer builds an Anthropic SSE transformer for the response stream.
+// The transformer converts embedded tool call markup to proper Anthropic tool_use events.
 //
 // @param w - Writer to receive transformed output.
-// @return Transformer for passing through SSE events unchanged.
+// @return Transformer for processing SSE events with tool call conversion.
 //
 // @pre w != nil and ready to receive writes.
 // @post Caller must call Close() on returned transformer.
 //
-// @note Uses PassthroughTransformer because Anthropic upstream already returns
+// @note Kimi K2.5 embeds tool calls in reasoning content using proprietary markup:
 //
-//	Anthropic-format events that should be passed through unchanged.
+//	<|tool_calls_section_begin|><|tool_call_begin|>name<|tool_call_argument_begin|>args<|tool_call_end|>
+//	This transformer converts that markup to proper Anthropic tool_use content blocks.
 func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransformer {
-	// Use passthrough transformer - upstream is already Anthropic format
-	return transform.NewPassthroughTransformer(w)
+	// Use Anthropic transformer to convert embedded tool call markup to proper Anthropic format
+	return toolcall.NewAnthropicTransformer(w, "", "")
 }
 
 // WriteError sends an error response in Anthropic format.

@@ -635,6 +635,23 @@ func (p *Parser) State() state {
 	return p.state
 }
 
+// IsIdle returns true if the parser is in idle state (not parsing tool calls).
+// This is used to determine whether incoming text should be parsed or passed through.
+//
+// @brief Checks if parser is outside any tool call section.
+//
+// @return bool True if parser is idle, false if actively parsing tool calls.
+//
+// @pre None.
+// @post No state is modified.
+//
+// @note When IsIdle returns false, the parser is expecting more input to complete
+//
+//	a tool call. Incoming text should be fed to Parse() regardless of content.
+func (p *Parser) IsIdle() bool {
+	return p.state == stateIdle
+}
+
 // Buffer returns the current unprocessed buffer contents.
 // This is primarily used for testing and debugging.
 //
