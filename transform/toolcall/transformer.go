@@ -55,18 +55,6 @@ type Transformer struct {
 	// model is the model name for the response.
 	// Extracted from the first upstream chunk and propagated to output.
 	model string
-
-	// buf is an internal buffer for accumulating output.
-	// Currently unused but reserved for future optimization.
-	buf []byte
-
-	// blockIndex tracks the current content block index for Anthropic format.
-	// Incremented when processing tool_use blocks.
-	blockIndex int
-
-	// inToolUse indicates if we're currently processing tool call markup.
-	// Used to track state across multiple events.
-	inToolUse bool
 }
 
 // NewOpenAITransformer creates a transformer that outputs OpenAI streaming format.
@@ -343,8 +331,6 @@ func (t *Transformer) extractAndConvertToolCalls(text string, blockIndex *int) e
 			}
 		case EventToolStart:
 			// Start of tool call - emit content_block_start for tool_use.
-			t.inToolUse = true
-			t.blockIndex++
 			if err := t.writeEvent(e); err != nil {
 				return err
 			}
@@ -358,7 +344,6 @@ func (t *Transformer) extractAndConvertToolCalls(text string, blockIndex *int) e
 			if err := t.writeEvent(e); err != nil {
 				return err
 			}
-			t.inToolUse = false
 		}
 	}
 	return nil
@@ -439,10 +424,10 @@ func (t *Transformer) writeSSE(data []byte) error {
 	return err
 }
 
-// setMessageID updates the message ID in the formatter.
-// This method uses type assertion to call the appropriate setter.
+// setMessageID updates the message ID and model in the formatter.
+// This propagates the extracted values to the formatter for consistent output.
 //
-// @brief Internal method to propagate message ID to the formatter.
+// @brief Internal method to propagate message ID and model to the formatter.
 //
 // @param id The message ID to set.
 //
@@ -452,23 +437,11 @@ func (t *Transformer) writeSSE(data []byte) error {
 //
 //	Must be valid UTF-8 for JSON encoding.
 //
-// @return None (method returns no value).
-//
-// @pre Formatter must be OpenAIFormatter or AnthropicFormatter.
+// @pre Formatter must implement SetMessageID and SetModel methods.
 // @post Formatter's message ID and model are updated.
-//
-// @note Uses type assertion to handle different formatter types.
-//
-//	This is a design trade-off for flexibility.
 func (t *Transformer) setMessageID(id, model string) {
-	switch f := t.formatter.(type) {
-	case *OpenAIFormatter:
-		f.SetMessageID(id)
-		f.SetModel(model)
-	case *AnthropicFormatter:
-		f.SetMessageID(id)
-		f.SetModel(model)
-	}
+	t.formatter.SetMessageID(id)
+	t.formatter.SetModel(model)
 }
 
 // Flush processes any remaining buffered content in the parser.

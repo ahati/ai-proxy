@@ -127,4 +127,34 @@ type OutputFormatter interface {
 	// @note Most APIs do not require explicit section end markers.
 	// @note This is included for future extensibility and completeness.
 	FormatSectionEnd() []byte
+
+	// SetMessageID updates the message ID used in output events.
+	//
+	// @brief Sets the message ID for subsequent output events.
+	//
+	// @param id The message ID to use.
+	//
+	//	Must be valid UTF-8 for JSON encoding.
+	//	Format varies by API (OpenAI: "chatcmpl-xxx", Anthropic: "msg_xxx").
+	//
+	// @pre None.
+	// @post Subsequent events will use this ID.
+	//
+	// @note Typically called when ID is extracted from first upstream chunk.
+	SetMessageID(id string)
+
+	// SetModel updates the model name used in output events.
+	//
+	// @brief Sets the model name for subsequent output events.
+	//
+	// @param model The model name to use.
+	//
+	//	Must be valid UTF-8 for JSON encoding.
+	//	Examples: "gpt-4", "moonshotai/Kimi-K2.5-TEE", "kimi-k2.5".
+	//
+	// @pre None.
+	// @post Subsequent events will use this model name.
+	//
+	// @note Typically called when model is extracted from first upstream chunk.
+	SetModel(model string)
 }
