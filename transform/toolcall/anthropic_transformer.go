@@ -66,13 +66,13 @@ func (t *AnthropicTransformer) Transform(event *sse.Event) error {
 		return t.writeData([]byte(event.Data))
 	}
 
-	return t.handleEvent(anthropicEvent)
+	return t.handleEvent(anthropicEvent, []byte(event.Data))
 }
 
-func (t *AnthropicTransformer) handleEvent(event types.Event) error {
+func (t *AnthropicTransformer) handleEvent(event types.Event, rawJSON []byte) error {
 	switch event.Type {
 	case "message_start":
-		return t.handleMessageStart(event)
+		return t.handleMessageStart(event, rawJSON)
 	case "content_block_start":
 		return t.handleContentBlockStart(event)
 	case "content_block_delta":
@@ -80,15 +80,15 @@ func (t *AnthropicTransformer) handleEvent(event types.Event) error {
 	case "content_block_stop":
 		return t.handleContentBlockStop(event)
 	case "message_delta":
-		return t.handleMessageDelta(event)
+		return t.handleMessageDelta(event, rawJSON)
 	case "message_stop", "ping":
-		return t.writePassthrough(event.Type, marshalJSON(event))
+		return t.writePassthrough(event.Type, rawJSON)
 	default:
-		return t.writePassthrough(event.Type, marshalJSON(event))
+		return t.writePassthrough(event.Type, rawJSON)
 	}
 }
 
-func (t *AnthropicTransformer) handleMessageStart(event types.Event) error {
+func (t *AnthropicTransformer) handleMessageStart(event types.Event, rawJSON []byte) error {
 	if event.Message != nil && event.Message.ID != "" {
 		t.messageID = event.Message.ID
 		t.blockIndex = 0
@@ -96,37 +96,33 @@ func (t *AnthropicTransformer) handleMessageStart(event types.Event) error {
 		t.formatter.SetModel(event.Message.Model)
 	}
 
-	var rawEvent struct {
-		Type    string `json:"type"`
-		Message struct {
-			ID      string                 `json:"id"`
-			Type    string                 `json:"type"`
-			Role    string                 `json:"role"`
-			Content []interface{}          `json:"content"`
-			Model   string                 `json:"model"`
-			Usage   map[string]interface{} `json:"usage"`
-		} `json:"message"`
+	// Work with raw JSON to preserve all fields and handle flexible usage formats
+	var rawData map[string]interface{}
+	if err := json.Unmarshal(rawJSON, &rawData); err != nil {
+		return t.writePassthrough(event.Type, rawJSON)
 	}
 
-	rawData := marshalJSON(event)
-	if err := json.Unmarshal(rawData, &rawEvent); err == nil {
-		if rawEvent.Message.Usage != nil {
-			if _, hasInputTokens := rawEvent.Message.Usage["input_tokens"]; !hasInputTokens {
-				if promptTokens, ok := rawEvent.Message.Usage["prompt_tokens"]; ok {
-					rawEvent.Message.Usage["input_tokens"] = promptTokens
-					delete(rawEvent.Message.Usage, "prompt_tokens")
+	// Normalize usage in message object
+	if message, ok := rawData["message"].(map[string]interface{}); ok {
+		if usage, ok := message["usage"].(map[string]interface{}); ok {
+			// Normalize field names to Anthropic format
+			if _, hasInputTokens := usage["input_tokens"]; !hasInputTokens {
+				if promptTokens, exists := usage["prompt_tokens"]; exists {
+					usage["input_tokens"] = promptTokens
+					delete(usage, "prompt_tokens")
 				}
-				if completionTokens, ok := rawEvent.Message.Usage["completion_tokens"]; ok {
-					rawEvent.Message.Usage["output_tokens"] = completionTokens
-					delete(rawEvent.Message.Usage, "completion_tokens")
-				}
-				delete(rawEvent.Message.Usage, "total_tokens")
-				return t.writePassthrough(event.Type, marshalJSON(rawEvent))
 			}
+			if _, hasOutputTokens := usage["output_tokens"]; !hasOutputTokens {
+				if completionTokens, exists := usage["completion_tokens"]; exists {
+					usage["output_tokens"] = completionTokens
+					delete(usage, "completion_tokens")
+				}
+			}
+			delete(usage, "total_tokens")
 		}
 	}
 
-	return t.writePassthrough(event.Type, marshalJSON(event))
+	return t.writePassthrough(event.Type, marshalJSON(rawData))
 }
 
 func (t *AnthropicTransformer) handleContentBlockStart(event types.Event) error {
@@ -259,22 +255,43 @@ func (t *AnthropicTransformer) handleTextBlockStop(event types.Event) error {
 	return nil
 }
 
-func (t *AnthropicTransformer) handleMessageDelta(event types.Event) error {
-	if t.toolsEmitted && event.Delta != nil {
-		var delta struct {
-			StopReason   string  `json:"stop_reason,omitempty"`
-			StopSequence *string `json:"stop_sequence,omitempty"`
+func (t *AnthropicTransformer) handleMessageDelta(event types.Event, rawJSON []byte) error {
+	// Work with raw JSON to preserve all fields and handle flexible usage formats
+	var rawData map[string]interface{}
+	if err := json.Unmarshal(rawJSON, &rawData); err != nil {
+		return t.writePassthrough(event.Type, rawJSON)
+	}
+
+	// Normalize usage at top level
+	if usage, ok := rawData["usage"].(map[string]interface{}); ok {
+		// Normalize field names to Anthropic format
+		if _, hasOutputTokens := usage["output_tokens"]; !hasOutputTokens {
+			if completionTokens, exists := usage["completion_tokens"]; exists {
+				usage["output_tokens"] = completionTokens
+				delete(usage, "completion_tokens")
+			}
 		}
-		if err := json.Unmarshal(event.Delta, &delta); err == nil {
-			if delta.StopReason == "end_turn" {
+		if _, hasInputTokens := usage["input_tokens"]; !hasInputTokens {
+			if promptTokens, exists := usage["prompt_tokens"]; exists {
+				usage["input_tokens"] = promptTokens
+				delete(usage, "prompt_tokens")
+			}
+		}
+		delete(usage, "total_tokens")
+	}
+
+	// Handle stop_reason conversion for tool calls
+	if t.toolsEmitted {
+		if delta, ok := rawData["delta"].(map[string]interface{}); ok {
+			if stopReason, exists := delta["stop_reason"].(string); exists && stopReason == "end_turn" {
 				logging.InfoMsg("[%s] Changing stop_reason from 'end_turn' to 'tool_use' due to emitted tool calls", t.messageID)
-				delta.StopReason = "tool_use"
-				event.Delta = json.RawMessage(marshalJSON(delta))
-				return t.writePassthrough(event.Type, marshalJSON(event))
+				delta["stop_reason"] = "tool_use"
+				return t.writePassthrough(event.Type, marshalJSON(rawData))
 			}
 		}
 	}
-	return t.writePassthrough(event.Type, marshalJSON(event))
+
+	return t.writePassthrough(event.Type, marshalJSON(rawData))
 }
 
 func (t *AnthropicTransformer) processThinking(text string, index int) [][]byte {
