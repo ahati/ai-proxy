@@ -87,6 +87,7 @@ func TestServer_setupRoutes(t *testing.T) {
 		{method: "GET", path: "/v1/models"},
 		{method: "POST", path: "/v1/chat/completions"},
 		{method: "POST", path: "/v1/messages"},
+		{method: "POST", path: "/v1/messages/count_tokens"},
 		{method: "POST", path: "/v1/openai-to-anthropic/messages"},
 	}
 
@@ -110,7 +111,7 @@ func TestServer_setupRoutes_RouteCount(t *testing.T) {
 
 	routes := server.router.Routes()
 
-	expectedCount := 5
+	expectedCount := 6
 	if len(routes) != expectedCount {
 		t.Errorf("expected %d routes, got %d", expectedCount, len(routes))
 	}

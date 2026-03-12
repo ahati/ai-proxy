@@ -192,3 +192,42 @@ type AnthropicErrorDetail struct {
 	// Provides context about the error.
 	Message string `json:"message"`
 }
+
+// MessageCountTokensRequest represents a request to the /v1/messages/count_tokens endpoint.
+// This request structure matches the Anthropic Messages API count_tokens format.
+type MessageCountTokensRequest struct {
+	// Model is the model identifier to use for token counting.
+	// Required field - different models may have different tokenization.
+	Model string `json:"model"`
+	// Messages is the conversation history to count tokens for.
+	// Required field - array of message objects.
+	Messages []MessageInput `json:"messages"`
+	// System provides system-level instructions.
+	// Optional; can be a string or structured content blocks.
+	System interface{} `json:"system,omitempty"`
+	// Tools is a list of tools that may be called.
+	// Optional; tool definitions affect token count.
+	Tools []ToolDef `json:"tools,omitempty"`
+	// Thinking enables extended thinking mode.
+	// Optional; thinking budget affects token count.
+	Thinking *ThinkingConfig `json:"thinking,omitempty"`
+}
+
+// ThinkingConfig represents extended thinking configuration.
+// Used to enable and configure thinking mode for supported models.
+type ThinkingConfig struct {
+	// Type enables thinking mode.
+	// Value: "enabled" to activate thinking.
+	Type string `json:"type"`
+	// BudgetTokens is the maximum tokens for thinking.
+	// Required when thinking is enabled.
+	BudgetTokens int `json:"budget_tokens"`
+}
+
+// MessageCountTokensResponse represents the response from the count_tokens endpoint.
+// Returns the estimated input token count for the provided messages.
+type MessageCountTokensResponse struct {
+	// InputTokens is the estimated number of tokens in the input.
+	// This is an estimate; actual token count may differ slightly.
+	InputTokens int `json:"input_tokens"`
+}
