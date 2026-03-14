@@ -1,14 +1,60 @@
-# AI Proxy for Kimi-K2.5 / K2
+# AI Proxy
 
-A Go-based HTTP proxy that transforms Kimi-K2.5 and K2's proprietary tool call format into OpenAI-compatible `tool_calls` format, enabling seamless integration with OpenAI-compatible clients and SDKs.
+A Go-based HTTP proxy for LLM APIs with OpenAI and Anthropic compatibility. Provides format transformation, tool call normalization, and seamless integration between different API formats.
 
-## Problem Statement
+## Features
 
-Kimi-K2.5 and K2 models output tool/function calls using special delimiter tokens embedded in the SSE `reasoning` field, rather than the standard OpenAI `tool_calls` format. Cloud providers typically fix this server-side, but self-hosted deployments or direct API access expose this incompatibility, breaking OpenAI-compatible clients, SDKs, and tools.
+- **Multi-format support**: OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses API
+- **Bidirectional conversion**: Convert between OpenAI and Anthropic formats in both directions
+- **Tool call normalization**: Transforms Kimi-K2.5/K2's proprietary tool call format into standard formats
+- **Streaming support**: Real-time SSE streaming with format transformation
+- **Request capture**: Optional logging of all requests/responses for debugging
 
-### Non-Standard Tool Call Format (Example)
+## API Endpoints
 
-Kimi-K2.5 and K2 use special delimiter tokens instead of OpenAI's structured JSON:
+| Method | Path | Request Format | Upstream Format | Response Format | Description |
+|--------|------|----------------|-----------------|-----------------|-------------|
+| `GET` | `/health` | N/A | N/A | N/A | Health check |
+| `GET` | `/v1/models` | OpenAI | N/A | OpenAI | List available models |
+| `POST` | `/v1/chat/completions` | OpenAI | OpenAI | OpenAI | Chat completions with tool call normalization |
+| `POST` | `/v1/messages` | Anthropic | Anthropic | Anthropic | Anthropic messages with tool call normalization |
+| `POST` | `/v1/openai-to-anthropic/messages` | Anthropic | OpenAI | Anthropic | Bridge: Anthropic client → OpenAI backend |
+| `POST` | `/v1/anthropic-to-openai/responses` | OpenAI Responses | Anthropic | OpenAI Responses | Bridge: OpenAI SDK → Anthropic backend |
+
+## Architecture
+
+```
+                                    ┌─────────────────────────────────────┐
+                                    │           AI Proxy                  │
+                                    │                                     │
+┌──────────────┐                    │  ┌─────────────────────────────┐    │
+│  OpenAI SDK  │──▶ /v1/chat/completions ──▶│ OpenAI Transformer │───┼──▶ OpenAI Upstream
+│              │◀── OpenAI Response ────────│ (tool call fix)    │◀──┼─── OpenAI Response
+└──────────────┘                    │  └─────────────────────────────┘    │
+                                    │                                     │
+┌──────────────┐                    │  ┌─────────────────────────────┐    │
+│ Anthropic SDK│──▶ /v1/messages ─────▶│ Anthropic Transformer │─────┼──▶ Anthropic Upstream
+│              │◀─ Anthropic Response ─│ (tool call fix)       │◀────┼─── Anthropic Response
+└──────────────┘                    │  └─────────────────────────────┘    │
+                                    │                                     │
+┌──────────────┐                    │  ┌─────────────────────────────┐    │
+│ Anthropic SDK│──▶ /v1/openai-to-anthropic/messages ──▶│ Bridge │───┼──▶ OpenAI Upstream
+│              │◀── Anthropic Response ─────────────────│(A→O→A) │◀──┼─── OpenAI Response
+└──────────────┘                    │  └─────────────────────────────┘    │
+                                    │                                     │
+┌──────────────┐                    │  ┌─────────────────────────────┐    │
+│ OpenAI SDK   │──▶ /v1/anthropic-to-openai/responses ──▶│ Bridge │──┼──▶ Anthropic Upstream
+│ (Responses)  │◀── OpenAI Response ─────────────────────│(O→A→O)│◀──┼─── Anthropic Response
+└──────────────┘                    │  └─────────────────────────────┘    │
+                                    │                                     │
+                                    └─────────────────────────────────────┘
+```
+
+## Tool Call Transformation
+
+Kimi-K2.5 and K2 models output tool/function calls using special delimiter tokens embedded in the SSE `reasoning` field, rather than standard formats. This proxy transforms these in real-time during streaming.
+
+### Non-Standard Format (Input)
 
 ```
 <|tool_calls_section_begin|>
@@ -17,11 +63,7 @@ Kimi-K2.5 and K2 use special delimiter tokens instead of OpenAI's structured JSO
 <|tool_calls_section_end|>
 ```
 
-**Note:** This behavior is intermittent—it occurs only sometimes depending on the model's response. The proxy handles both cases: when tool calls appear in reasoning tokens (transforms them) and when they use standard format (passes through unchanged).
-
-### OpenAI's Expected Format
-
-OpenAI-compatible clients expect tool calls in this structured format:
+### OpenAI Format (Output)
 
 ```json
 {
@@ -40,129 +82,138 @@ OpenAI-compatible clients expect tool calls in this structured format:
 }
 ```
 
-## Solution
+### Anthropic Format (Output)
 
-This proxy sits between your application and the Kimi-K2.5/K2 upstream API, transforming the non-standard tool call format in real-time during SSE streaming:
-
+```json
+{
+  "type": "content_block_delta",
+  "index": 1,
+  "delta": {
+    "type": "input_json_delta",
+    "partial_json": "{\"command\": \"ls -la\"}"
+  }
+}
 ```
-┌─────────────┐      ┌──────────────────────┐      ┌────────────────────┐
-│   Client    │ ───▶ │   AI Proxy           │ ───▶ │  Kimi-K2.5/K2 API  │
-│ (OpenAI SDK)│ ◀─── │ (ToolCallTransformer)│ ◀─── │(e.g. llm.chutes.ai)│
-└─────────────┘      └──────────────────────┘      └────────────────────┘
-```
-
-### Key Features
-
-- **Real-time transformation**: Converts tool call tokens to OpenAI format during streaming
-- **Token reassembly**: Handles special tokens split across multiple SSE chunks via state machine buffering
-- **Full OpenAI compatibility**: Exposes standard `/v1/chat/completions`, `/v1/models`, and `/health` endpoints
-- **Pass-through for non-tool responses**: Regular text completions pass through unchanged
-
-## API Endpoints
-
-| Method | Path | Format | Description |
-|--------|------|--------|-------------|
-| `GET` | `/health` | N/A | Health check |
-| `GET` | `/v1/models` | OpenAI | List available models |
-| `POST` | `/v1/chat/completions` | OpenAI | Chat completions (streaming) |
-| `POST` | `/v1/messages` | Anthropic | Chat completions (streaming) |
-| `POST` | `/v1/openai-to-anthropic/messages` | Anthropic | Reverse proxy: Anthropic format → OpenAI upstream → Anthropic response |
-| `POST` | `/v1/anthropic-to-openai/responses` | OpenAI | Reverse proxy: OpenAI Responses API format → Anthropic upstream → OpenAI Responses API response |
 
 ## Configuration
 
-### OpenAI Format (`/v1/chat/completions`)
+### Environment Variables
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `PORT` | `8080` | Server port |
 | `UPSTREAM_URL` | `https://llm.chutes.ai/v1/chat/completions` | OpenAI-compatible upstream URL |
 | `UPSTREAM_API_KEY` | (empty) | API key for OpenAI-compatible upstream |
-
-### Anthropic Format (`/v1/messages`)
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `ANTHROPIC_UPSTREAM_URL` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages` | Anthropic-compatiable upstream URL |
-| `ANTHROPIC_API_KEY` | (empty) | API key for Anthropic upstream |
-
-### OpenAI-to-Anthropic Reverse Proxy (`/v1/openai-to-anthropic/messages`)
-
-This endpoint accepts requests in **Anthropic format**, forwards them to an **OpenAI-compatible upstream**, and transforms the response back to **Anthropic format**. Useful when you have clients expecting Anthropic API responses but need to use an OpenAI-compatible backend.
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `UPSTREAM_URL` | `https://llm.chutes.ai/v1/chat/completions` | OpenAI-compatible upstream URL |
-| `UPSTREAM_API_KEY` | (empty) | API key for OpenAI-compatible upstream |
-
-### Anthropic-to-OpenAI Responses Reverse Proxy (`/v1/anthropic-to-openai/responses`)
-
-This endpoint accepts requests in **OpenAI Responses API format**, forwards them to an **Anthropic-compatible upstream**, and transforms the response back to **OpenAI Responses API format**. Useful when you have clients using the OpenAI SDK (responses API) but need to call an Anthropic-compatible backend.
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
 | `ANTHROPIC_UPSTREAM_URL` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages` | Anthropic-compatible upstream URL |
-| `ANTHROPIC_API_KEY` | (empty) | API key for Anthropic upstream |
+| `ALIBABA_ANTHROPIC_API_KEY` | (empty) | API key for Anthropic upstream |
+| `SSELOG_DIR` | (empty) | Directory for request/response logging |
 
-### Common
+### Endpoint Configuration
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `SSELOG_DIR` | (empty) | Directory for SSE debug logs |
+| Endpoint | Upstream URL | API Key |
+|----------|--------------|---------|
+| `/v1/chat/completions` | `UPSTREAM_URL` | `UPSTREAM_API_KEY` |
+| `/v1/messages` | `ANTHROPIC_UPSTREAM_URL` | `ALIBABA_ANTHROPIC_API_KEY` |
+| `/v1/openai-to-anthropic/messages` | `UPSTREAM_URL` | `UPSTREAM_API_KEY` |
+| `/v1/anthropic-to-openai/responses` | `ANTHROPIC_UPSTREAM_URL` | `ALIBABA_ANTHROPIC_API_KEY` |
 
 ## Usage
+
+### Build and Run
 
 ```bash
 # Build
 go build -o ai-proxy .
 
-# Run with OpenAI-compatible upstream (default)
+# Run with default configuration
 ./ai-proxy
 
-# Run with custom OpenAI upstream
-UPSTREAM_URL=https://llm.chutes.ai/v1/chat/completions \
+# Run with custom upstreams
+UPSTREAM_URL=https://api.example.com/v1/chat/completions \
 UPSTREAM_API_KEY=your-key \
-./ai-proxy
-
-# Run with Anthropic upstream
-ANTHROPIC_UPSTREAM_URL=https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages \
-ANTHROPIC_API_KEY=your-anthropic-key \
-./ai-proxy
-
-# Run with OpenAI-to-Anthropic reverse proxy
-UPSTREAM_URL=https://llm.chutes.ai/v1/chat/completions \
-UPSTREAM_API_KEY=your-key \
-./ai-proxy
-
-# Run with both upstreams
-UPSTREAM_URL=https://llm.chutes.ai/v1/chat/completions \
-UPSTREAM_API_KEY=your-key \
-ANTHROPIC_UPSTREAM_URL=https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages \
-ANTHROPIC_API_KEY=your-anthropic-key \
+ANTHROPIC_UPSTREAM_URL=https://api.anthropic.com/v1/messages \
+ALIBABA_ANTHROPIC_API_KEY=your-anthropic-key \
 PORT=3000 \
 ./ai-proxy
+
+# Run with request logging
+SSELOG_DIR=./logs ./ai-proxy
 ```
 
-## Technical Details
+### Example Requests
 
-### Tool Call Transformation
+#### OpenAI Chat Completions
 
-The `ToolCallTransformer` implements a 5-state machine (`IDLE → IN_SECTION → READING_ID → READING_ARGS → TRAILING`) that:
+```bash
+curl -X POST http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "moonshotai/Kimi-K2.5-TEE",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+```
 
-1. Buffers incoming reasoning text across SSE chunks
-2. Detects special delimiter tokens
-3. Extracts function name and arguments
-4. Emits properly formatted OpenAI `tool_calls` deltas
+#### Anthropic Messages
 
-### Supported Special Tokens
+```bash
+curl -X POST http://localhost:8080/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Anthropic-Version: 2023-06-01" \
+  -d '{
+    "model": "kimi-k2.5",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+```
 
-| Token | Description |
-|-------|-------------|
-| `<|tool_calls_section_begin|>` | Starts the tool calls section |
-| `<|tool_call_begin|>` | Starts a function call (ID/name follows) |
-| `<|tool_call_argument_begin|>` | Starts the JSON arguments |
-| `<|tool_call_end|>` | Ends the current tool call |
-| `<|tool_calls_section_end|>` | Ends the tool calls section |
+#### OpenAI-to-Anthropic Bridge
+
+Use Anthropic SDK with an OpenAI-compatible backend:
+
+```bash
+curl -X POST http://localhost:8080/v1/openai-to-anthropic/messages \
+  -H "Content-Type: application/json" \
+  -H "Anthropic-Version: 2023-06-01" \
+  -d '{
+    "model": "gpt-4",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+```
+
+#### Anthropic-to-OpenAI Responses Bridge
+
+Use OpenAI SDK (Responses API) with an Anthropic backend:
+
+```bash
+curl -X POST http://localhost:8080/v1/anthropic-to-openai/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "claude-3-5-sonnet-20241022",
+    "input": [{"role": "user", "content": "Hello"}],
+    "stream": true
+  }'
+```
+
+## Request Capture
+
+When `SSELOG_DIR` is set, all requests are captured to structured JSON files:
+
+```bash
+SSELOG_DIR=./logs ./ai-proxy
+
+# Logs are organized by date
+ls logs/$(date +%Y-%m-%d)/
+```
+
+**Captured data** (4 capture points):
+1. **Downstream TX** - Client request to proxy
+2. **Upstream TX** - Proxy request to LLM API
+3. **Upstream RX** - LLM API response to proxy
+4. **Downstream RX** - Proxy response to client
 
 ## Project Structure
 
@@ -178,7 +229,8 @@ ai-proxy/
 │       ├── completions.go  # OpenAI chat completions
 │       ├── messages.go     # Anthropic messages endpoint
 │       ├── bridge.go       # OpenAI-to-Anthropic bridge
-│       ├── anthropic_to_openai.go  # Anthropic-to-OpenAI responses bridge
+│       ├── anthropic_to_openai.go  # Anthropic-to-OpenAI bridge
+│       ├── count_tokens.go # Token counting endpoint
 │       └── common.go       # Shared handler utilities
 ├── config/                 # Configuration loading
 │   └── config.go
@@ -189,14 +241,17 @@ ai-proxy/
 │   └── request.go          # Request building utilities
 ├── transform/              # Response transformation
 │   ├── interface.go        # Transformer interface
+│   ├── passthrough.go      # Pass-through transformer
 │   └── toolcall/           # Tool call format transformation
-│       ├── transformer.go  # State machine transformer
+│       ├── transformer.go  # OpenAI transformer state machine
+│       ├── anthropic_transformer.go  # Anthropic transformer
+│       ├── responses_transformer.go   # OpenAI Responses API transformer
 │       ├── parser.go       # Token parsing
 │       ├── tokens.go       # Special token definitions
 │       ├── formatter.go    # Output formatting
 │       ├── anthropic.go    # Anthropic format support
 │       ├── openai.go       # OpenAI format support
-│       └── responses_transformer.go  # OpenAI Responses API transformer
+│       └── common.go       # Shared utilities
 ├── types/                  # Type definitions
 │   ├── openai.go           # OpenAI API types
 │   ├── openai_responses.go # OpenAI Responses API types
@@ -218,12 +273,48 @@ go test ./...
 # Run tests with coverage
 go test -cover ./...
 
+# Run specific test
+go test -v -run TestFunctionName ./...
+
 # Format code
 go fmt ./...
 
 # Static analysis
 go vet ./...
+
+# Tidy dependencies
+go mod tidy
 ```
+
+## Technical Details
+
+### Tool Call Transformation
+
+The `ToolCallTransformer` implements a 5-state machine (`IDLE → IN_SECTION → READING_ID → READING_ARGS → TRAILING`) that:
+
+1. Buffers incoming reasoning text across SSE chunks
+2. Detects special delimiter tokens
+3. Extracts function name and arguments
+4. Emits properly formatted tool calls in the target format
+
+### Supported Special Tokens
+
+| Token | Description |
+|-------|-------------|
+| `<|tool_calls_section_begin|>` | Starts the tool calls section |
+| `<|tool_call_begin|>` | Starts a function call (ID/name follows) |
+| `<|tool_call_argument_begin|>` | Starts the JSON arguments |
+| `<|tool_call_end|>` | Ends the current tool call |
+| `<|tool_calls_section_end|>` | Ends the tool calls section |
+
+### Format Conversions
+
+| Conversion | Request Transform | Response Transform |
+|------------|-------------------|-------------------|
+| OpenAI → OpenAI | None (pass-through) | Tool call normalization |
+| Anthropic → Anthropic | None (pass-through) | Tool call normalization |
+| Anthropic → OpenAI → Anthropic | Anthropic to OpenAI | OpenAI to Anthropic |
+| OpenAI Responses → Anthropic → OpenAI Responses | Responses to Anthropic | Anthropic to Responses |
 
 ## License
 
