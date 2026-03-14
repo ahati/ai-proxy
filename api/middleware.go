@@ -5,6 +5,7 @@ package api
 
 import (
 	"ai-proxy/capture"
+	"ai-proxy/logging"
 
 	"github.com/gin-gonic/gin"
 )
@@ -71,10 +72,9 @@ func (m *CaptureMiddleware) Handler() gin.HandlerFunc {
 			if m.storage == nil {
 				return
 			}
-			// Write error is intentionally ignored as there's no recovery path
-			// Failed captures are logged internally by storage if needed
+			// Log any errors to help with debugging
 			if err := m.storage.Write(cc.Recorder); err != nil {
-				_ = err
+				logging.ErrorMsg("Failed to write capture: %v", err)
 			}
 		}()
 	}

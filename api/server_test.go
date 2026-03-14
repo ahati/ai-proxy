@@ -111,7 +111,7 @@ func TestServer_setupRoutes_RouteCount(t *testing.T) {
 
 	routes := server.router.Routes()
 
-	expectedCount := 6
+	expectedCount := 7
 	if len(routes) != expectedCount {
 		t.Errorf("expected %d routes, got %d", expectedCount, len(routes))
 	}

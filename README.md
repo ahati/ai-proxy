@@ -67,6 +67,7 @@ This proxy sits between your application and the Kimi-K2.5/K2 upstream API, tran
 | `POST` | `/v1/chat/completions` | OpenAI | Chat completions (streaming) |
 | `POST` | `/v1/messages` | Anthropic | Chat completions (streaming) |
 | `POST` | `/v1/openai-to-anthropic/messages` | Anthropic | Reverse proxy: Anthropic format → OpenAI upstream → Anthropic response |
+| `POST` | `/v1/anthropic-to-openai/responses` | OpenAI | Reverse proxy: OpenAI Responses API format → Anthropic upstream → OpenAI Responses API response |
 
 ## Configuration
 
@@ -93,6 +94,15 @@ This endpoint accepts requests in **Anthropic format**, forwards them to an **Op
 |---------------------|---------|-------------|
 | `UPSTREAM_URL` | `https://llm.chutes.ai/v1/chat/completions` | OpenAI-compatible upstream URL |
 | `UPSTREAM_API_KEY` | (empty) | API key for OpenAI-compatible upstream |
+
+### Anthropic-to-OpenAI Responses Reverse Proxy (`/v1/anthropic-to-openai/responses`)
+
+This endpoint accepts requests in **OpenAI Responses API format**, forwards them to an **Anthropic-compatible upstream**, and transforms the response back to **OpenAI Responses API format**. Useful when you have clients using the OpenAI SDK (responses API) but need to call an Anthropic-compatible backend.
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `ANTHROPIC_UPSTREAM_URL` | `https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages` | Anthropic-compatible upstream URL |
+| `ANTHROPIC_API_KEY` | (empty) | API key for Anthropic upstream |
 
 ### Common
 
@@ -168,6 +178,7 @@ ai-proxy/
 │       ├── completions.go  # OpenAI chat completions
 │       ├── messages.go     # Anthropic messages endpoint
 │       ├── bridge.go       # OpenAI-to-Anthropic bridge
+│       ├── anthropic_to_openai.go  # Anthropic-to-OpenAI responses bridge
 │       └── common.go       # Shared handler utilities
 ├── config/                 # Configuration loading
 │   └── config.go
@@ -184,9 +195,11 @@ ai-proxy/
 │       ├── tokens.go       # Special token definitions
 │       ├── formatter.go    # Output formatting
 │       ├── anthropic.go    # Anthropic format support
-│       └── openai.go       # OpenAI format support
+│       ├── openai.go       # OpenAI format support
+│       └── responses_transformer.go  # OpenAI Responses API transformer
 ├── types/                  # Type definitions
 │   ├── openai.go           # OpenAI API types
+│   ├── openai_responses.go # OpenAI Responses API types
 │   ├── anthropic.go        # Anthropic API types
 │   └── sse.go              # Server-Sent Events types
 └── capture/                # Request/response capture

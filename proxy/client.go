@@ -156,9 +156,15 @@ func (c *Client) SetHeaders(req *http.Request) {
 
 	// Record headers for debugging, sanitizing sensitive values
 	if cc := capture.GetCaptureContext(req.Context()); cc != nil {
-		// Re-record the request with headers now that they're set
-		// This overwrites the previous recording with complete header information
-		cc.Recorder.RecordUpstreamRequest(req.Header, nil)
+		// Update the existing upstream request recording with headers
+		// The body was already recorded in BuildRequest, so we pass it again
+		// to preserve it along with the headers
+		// Get the existing body from the recorder
+		var body []byte
+		if cc.Recorder.Data().UpstreamRequest != nil {
+			body = cc.Recorder.Data().UpstreamRequest.Body
+		}
+		cc.Recorder.RecordUpstreamRequest(req.Header, body)
 	}
 }
 

@@ -1,0 +1,961 @@
+package toolcall
+
+import (
+	"bytes"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"ai-proxy/types"
+
+	"github.com/tmaxmax/go-sse"
+)
+
+// TestResponsesFormatter_FormatResponseCreated tests response.created event formatting.
+func TestResponsesFormatter_FormatResponseCreated(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+
+	result := formatter.FormatResponseCreated()
+	resultStr := string(result)
+
+	if !strings.HasPrefix(resultStr, "data: ") {
+		t.Error("Result should start with 'data: '")
+	}
+
+	if !strings.Contains(resultStr, `"type":"response.created"`) {
+		t.Error("Result should contain response.created type")
+	}
+
+	if !strings.Contains(resultStr, `"id":"resp_123"`) {
+		t.Error("Result should contain response ID")
+	}
+
+	if !strings.Contains(resultStr, `"model":"gpt-4o"`) {
+		t.Error("Result should contain model")
+	}
+}
+
+// TestResponsesFormatter_FormatContentPartAdded tests content part added event.
+func TestResponsesFormatter_FormatContentPartAdded(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+	formatter.SetResponseID("resp_123")
+
+	result := formatter.FormatContentPartAdded(0, "output_text")
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.content_part.added"`) {
+		t.Error("Result should contain response.content_part.added type")
+	}
+
+	if !strings.Contains(resultStr, `"content_index":0`) {
+		t.Error("Result should contain content_index")
+	}
+
+	if !strings.Contains(resultStr, `"type":"output_text"`) {
+		t.Error("Result should contain output_text type")
+	}
+}
+
+// TestResponsesFormatter_FormatOutputTextDelta tests text delta formatting.
+func TestResponsesFormatter_FormatOutputTextDelta(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+	formatter.SetResponseID("resp_123")
+
+	result := formatter.FormatOutputTextDelta(0, "Hello world")
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.output_text.delta"`) {
+		t.Error("Result should contain response.output_text.delta type")
+	}
+
+	if !strings.Contains(resultStr, `"delta":"Hello world"`) {
+		t.Error("Result should contain delta with text")
+	}
+}
+
+// TestResponsesFormatter_FormatFunctionCallItemAdded tests function call item added event.
+func TestResponsesFormatter_FormatFunctionCallItemAdded(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+	formatter.SetResponseID("resp_123")
+
+	result := formatter.FormatFunctionCallItemAdded("toolu_abc", "get_weather", 1)
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.output_item.added"`) {
+		t.Error("Result should contain response.output_item.added type")
+	}
+
+	if !strings.Contains(resultStr, `"type":"function_call"`) {
+		t.Error("Result should contain function_call item type")
+	}
+
+	if !strings.Contains(resultStr, `"id":"toolu_abc"`) {
+		t.Error("Result should contain call ID")
+	}
+
+	if !strings.Contains(resultStr, `"name":"get_weather"`) {
+		t.Error("Result should contain function name")
+	}
+
+	if !strings.Contains(resultStr, `"output_index":1`) {
+		t.Error("Result should contain output_index")
+	}
+}
+
+// TestResponsesFormatter_FormatFunctionCallArgsDelta tests function args delta.
+func TestResponsesFormatter_FormatFunctionCallArgsDelta(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+	formatter.SetResponseID("resp_123")
+
+	result := formatter.FormatFunctionCallArgsDelta("toolu_abc", "toolu_abc", `{"locat`)
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.function_call_arguments.delta"`) {
+		t.Error("Result should contain response.function_call_arguments.delta type")
+	}
+
+	if !strings.Contains(resultStr, `"call_id":"toolu_abc"`) {
+		t.Error("Result should contain call_id")
+	}
+
+	// The delta is JSON-escaped in the output
+	if !strings.Contains(resultStr, `"delta":"{\"locat"`) {
+		t.Errorf("Result should contain escaped delta - got: %s", resultStr)
+	}
+}
+
+// TestResponsesFormatter_FormatContentPartDone tests content part done event.
+func TestResponsesFormatter_FormatContentPartDone(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+	formatter.SetResponseID("resp_123")
+
+	// Test with output_text type
+	result := formatter.FormatContentPartDone(0, "output_text", "Hello world")
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.content_part.done"`) {
+		t.Error("Result should contain response.content_part.done type")
+	}
+
+	if !strings.Contains(resultStr, `"text":"Hello world"`) {
+		t.Error("Result should contain text content")
+	}
+
+	// Test with other type (no content)
+	result2 := formatter.FormatContentPartDone(1, "function_call", "")
+	resultStr2 := string(result2)
+
+	if !strings.Contains(resultStr2, `"type":"function_call"`) {
+		t.Error("Result should contain function_call type")
+	}
+}
+
+// TestResponsesFormatter_FormatOutputItemDone tests output item done event.
+func TestResponsesFormatter_FormatOutputItemDone(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+	formatter.SetResponseID("resp_123")
+
+	item := map[string]interface{}{
+		"type":   "message",
+		"id":     "msg_456",
+		"status": "completed",
+		"role":   "assistant",
+		"content": []map[string]interface{}{{
+			"type": "output_text",
+			"text": "Hello",
+		}},
+	}
+
+	result := formatter.FormatOutputItemDone("msg_456", item, 0)
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.output_item.done"`) {
+		t.Error("Result should contain response.output_item.done type")
+	}
+
+	if !strings.Contains(resultStr, `"id":"msg_456"`) {
+		t.Error("Result should contain item ID")
+	}
+
+	if !strings.Contains(resultStr, `"status":"completed"`) {
+		t.Error("Result should contain completed status")
+	}
+}
+
+// TestResponsesFormatter_FormatResponseCompleted tests response completed event.
+func TestResponsesFormatter_FormatResponseCompleted(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+	formatter.SetResponseID("resp_123")
+	formatter.SetModel("gpt-4o")
+
+	outputItems := []map[string]interface{}{{
+		"type":   "message",
+		"id":     "msg_456",
+		"status": "completed",
+		"role":   "assistant",
+		"content": []map[string]interface{}{{
+			"type": "output_text",
+			"text": "Hello",
+		}},
+	}}
+
+	result := formatter.FormatResponseCompleted(outputItems)
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.completed"`) {
+		t.Error("Result should contain response.completed type")
+	}
+
+	if !strings.Contains(resultStr, `"status":"completed"`) {
+		t.Error("Result should contain completed status")
+	}
+}
+
+// TestResponsesFormatter_FormatReasoningItemAdded tests reasoning item added event.
+func TestResponsesFormatter_FormatReasoningItemAdded(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+
+	result := formatter.FormatReasoningItemAdded("rs_abc", 0)
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.output_item.added"`) {
+		t.Error("Result should contain response.output_item.added type")
+	}
+
+	if !strings.Contains(resultStr, `"type":"reasoning"`) {
+		t.Error("Result should contain reasoning item type")
+	}
+
+	if !strings.Contains(resultStr, `"id":"rs_abc"`) {
+		t.Error("Result should contain reasoning ID")
+	}
+
+	if !strings.Contains(resultStr, `"output_index":0`) {
+		t.Error("Result should contain output_index")
+	}
+}
+
+// TestResponsesFormatter_FormatReasoningSummaryDelta tests reasoning summary delta.
+func TestResponsesFormatter_FormatReasoningSummaryDelta(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+
+	result := formatter.FormatReasoningSummaryDelta("rs_abc", "Analyzing...")
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.reasoning_summary_text.delta"`) {
+		t.Error("Result should contain response.reasoning_summary_text.delta type")
+	}
+
+	if !strings.Contains(resultStr, `"delta":"Analyzing..."`) {
+		t.Error("Result should contain delta")
+	}
+}
+
+// TestResponsesFormatter_FormatReasoningItemDone tests reasoning item done event.
+func TestResponsesFormatter_FormatReasoningItemDone(t *testing.T) {
+	formatter := NewResponsesFormatter("resp_123", "gpt-4o")
+
+	result := formatter.FormatReasoningItemDone("rs_abc", "Full reasoning text", 0)
+	resultStr := string(result)
+
+	if !strings.Contains(resultStr, `"type":"response.output_item.done"`) {
+		t.Error("Result should contain response.output_item.done type")
+	}
+
+	if !strings.Contains(resultStr, `"type":"summary_text"`) {
+		t.Error("Result should contain summary_text type")
+	}
+
+	if !strings.Contains(resultStr, `"text":"Full reasoning text"`) {
+		t.Error("Result should contain summary text")
+	}
+
+	if !strings.Contains(resultStr, `"output_index":0`) {
+		t.Error("Result should contain output_index")
+	}
+}
+
+// TestNewResponsesTransformer tests transformer creation.
+func TestNewResponsesTransformer(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	if transformer == nil {
+		t.Fatal("NewResponsesTransformer returned nil")
+	}
+
+	if transformer.output != &buf {
+		t.Error("Transformer output should match buffer")
+	}
+
+	if transformer.formatter == nil {
+		t.Error("Transformer formatter should not be nil")
+	}
+
+	if transformer.parser == nil {
+		t.Error("Transformer parser should not be nil")
+	}
+}
+
+// TestResponsesTransformer_Transform_EmptyData tests transform with empty data.
+func TestResponsesTransformer_Transform_EmptyData(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	event := &sse.Event{Data: ""}
+	err := transformer.Transform(event)
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	if buf.Len() != 0 {
+		t.Error("Buffer should be empty for empty event data")
+	}
+}
+
+// TestResponsesTransformer_Transform_Done tests transform with [DONE].
+func TestResponsesTransformer_Transform_Done(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	event := &sse.Event{Data: "[DONE]"}
+	err := transformer.Transform(event)
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, "data: [DONE]") {
+		t.Error("Result should contain data: [DONE]")
+	}
+}
+
+// TestResponsesTransformer_Transform_InvalidJSON tests transform with invalid JSON.
+func TestResponsesTransformer_Transform_InvalidJSON(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	event := &sse.Event{Data: "not valid json"}
+	err := transformer.Transform(event)
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, "data: not valid json") {
+		t.Error("Result should pass through invalid JSON")
+	}
+}
+
+// TestResponsesTransformer_HandleMessageStart tests message_start handling.
+func TestResponsesTransformer_HandleMessageStart(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	anthropicEvent := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc123",
+			Type:  "message",
+			Role:  "assistant",
+			Model: "claude-3-opus",
+		},
+	}
+
+	data, _ := json.Marshal(anthropicEvent)
+	event := &sse.Event{Data: string(data)}
+	err := transformer.Transform(event)
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.created"`) {
+		t.Error("Result should contain response.created event")
+	}
+
+	if !strings.Contains(result, `"id":"resp_abc123"`) {
+		t.Error("Result should contain converted response ID")
+	}
+
+	if !strings.Contains(result, `"model":"claude-3-opus"`) {
+		t.Error("Result should contain model")
+	}
+}
+
+// TestResponsesTransformer_HandleContentBlockStart_Text tests text block start.
+func TestResponsesTransformer_HandleContentBlockStart_Text(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// First send message_start
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Then send content_block_start for text
+	contentBlock := types.ContentBlock{Type: "text"}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.content_part.added"`) {
+		t.Error("Result should contain content_part.added event")
+	}
+
+	if !strings.Contains(result, `"type":"output_text"`) {
+		t.Error("Result should contain output_text type")
+	}
+}
+
+// TestResponsesTransformer_HandleContentBlockStart_Thinking tests thinking block start.
+func TestResponsesTransformer_HandleContentBlockStart_Thinking(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// First send message_start
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Then send content_block_start for thinking
+	contentBlock := types.ContentBlock{Type: "thinking"}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.output_item.added"`) {
+		t.Error("Result should contain response.output_item.added type")
+	}
+
+	if !strings.Contains(result, `"type":"reasoning"`) {
+		t.Error("Result should contain reasoning item type")
+	}
+
+	if !strings.Contains(result, `"id":"rs_abc"`) {
+		t.Error("Result should contain reasoning ID")
+	}
+}
+
+// TestResponsesTransformer_HandleContentBlockStart_ToolUse tests tool_use block start.
+func TestResponsesTransformer_HandleContentBlockStart_ToolUse(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// First send message_start
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Then send content_block_start for tool_use
+	contentBlock := types.ContentBlock{
+		Type: "tool_use",
+		ID:   "toolu_123",
+		Name: "get_weather",
+	}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"function_call"`) {
+		t.Error("Result should contain function_call type")
+	}
+
+	if !strings.Contains(result, `"id":"toolu_123"`) {
+		t.Error("Result should contain tool ID")
+	}
+
+	if !strings.Contains(result, `"name":"get_weather"`) {
+		t.Error("Result should contain function name")
+	}
+}
+
+// TestResponsesTransformer_HandleContentBlockDelta_Text tests text delta.
+func TestResponsesTransformer_HandleContentBlockDelta_Text(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	contentBlock := types.ContentBlock{Type: "text"}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Send text delta
+	delta := types.TextDelta{Type: "text_delta", Text: "Hello"}
+	deltaData, _ := json.Marshal(delta)
+	blockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(0),
+		Delta: deltaData,
+	}
+	data, _ = json.Marshal(blockDelta)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.output_text.delta"`) {
+		t.Error("Result should contain output_text.delta event")
+	}
+
+	if !strings.Contains(result, `"delta":"Hello"`) {
+		t.Error("Result should contain delta text")
+	}
+}
+
+// TestResponsesTransformer_HandleContentBlockDelta_Thinking tests thinking delta.
+func TestResponsesTransformer_HandleContentBlockDelta_Thinking(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	contentBlock := types.ContentBlock{Type: "thinking"}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Send thinking delta
+	delta := types.ThinkingDelta{Type: "thinking_delta", Thinking: "Analyzing..."}
+	deltaData, _ := json.Marshal(delta)
+	blockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(0),
+		Delta: deltaData,
+	}
+	data, _ = json.Marshal(blockDelta)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.reasoning_summary_text.delta"`) {
+		t.Error("Result should contain response.reasoning_summary_text.delta type")
+	}
+
+	if !strings.Contains(result, `"delta":"Analyzing..."`) {
+		t.Error("Result should contain thinking delta")
+	}
+}
+
+// TestResponsesTransformer_HandleContentBlockDelta_ToolInput tests tool input delta.
+func TestResponsesTransformer_HandleContentBlockDelta_ToolInput(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	contentBlock := types.ContentBlock{
+		Type: "tool_use",
+		ID:   "toolu_123",
+		Name: "get_weather",
+	}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Send input_json delta
+	delta := types.InputJSONDelta{Type: "input_json_delta", PartialJSON: `{"loc`}
+	deltaData, _ := json.Marshal(delta)
+	blockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(0),
+		Delta: deltaData,
+	}
+	data, _ = json.Marshal(blockDelta)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.function_call_arguments.delta"`) {
+		t.Error("Result should contain function_call_arguments.delta event")
+	}
+}
+
+// TestResponsesTransformer_HandleContentBlockStop tests block stop handling.
+func TestResponsesTransformer_HandleContentBlockStop(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	contentBlock := types.ContentBlock{Type: "text"}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	delta := types.TextDelta{Type: "text_delta", Text: "Hello world"}
+	deltaData, _ := json.Marshal(delta)
+	blockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(0),
+		Delta: deltaData,
+	}
+	data, _ = json.Marshal(blockDelta)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Send block stop
+	blockStop := types.Event{
+		Type:  "content_block_stop",
+		Index: intPtr(0),
+	}
+	data, _ = json.Marshal(blockStop)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.content_part.done"`) {
+		t.Error("Result should contain content_part.done event")
+	}
+
+	if !strings.Contains(result, `"text":"Hello world"`) {
+		t.Error("Result should contain accumulated text")
+	}
+}
+
+// TestResponsesTransformer_HandleMessageStop tests message stop.
+func TestResponsesTransformer_HandleMessageStop(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+	buf.Reset()
+
+	// Send message_stop
+	msgStop := types.Event{Type: "message_stop"}
+	data, _ = json.Marshal(msgStop)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	result := buf.String()
+	if !strings.Contains(result, `"type":"response.completed"`) {
+		t.Error("Result should contain response.completed event")
+	}
+}
+
+// TestResponsesTransformer_HandlePing tests ping handling.
+func TestResponsesTransformer_HandlePing(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	ping := types.Event{Type: "ping"}
+	data, _ := json.Marshal(ping)
+	err := transformer.Transform(&sse.Event{Data: string(data)})
+
+	if err != nil {
+		t.Errorf("Transform returned error: %v", err)
+	}
+
+	// Ping should produce no output
+	if buf.Len() != 0 {
+		t.Error("Buffer should be empty for ping events")
+	}
+}
+
+// TestResponsesTransformer_Flush tests flush operation.
+func TestResponsesTransformer_Flush(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	err := transformer.Flush()
+	if err != nil {
+		t.Errorf("Flush returned error: %v", err)
+	}
+}
+
+// TestResponsesTransformer_Close tests close operation.
+func TestResponsesTransformer_Close(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	err := transformer.Close()
+	if err != nil {
+		t.Errorf("Close returned error: %v", err)
+	}
+}
+
+// TestResponsesTransformer_FullFlow tests a complete streaming flow.
+func TestResponsesTransformer_FullFlow(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	events := []types.Event{
+		{
+			Type: "message_start",
+			Message: &types.MessageInfo{
+				ID:    "msg_abc123",
+				Type:  "message",
+				Role:  "assistant",
+				Model: "claude-3-opus",
+			},
+		},
+		{
+			Type:         "content_block_start",
+			Index:        intPtr(0),
+			ContentBlock: mustMarshal(types.ContentBlock{Type: "text"}),
+		},
+		{
+			Type:  "content_block_delta",
+			Index: intPtr(0),
+			Delta: mustMarshal(types.TextDelta{Type: "text_delta", Text: "Hello"}),
+		},
+		{
+			Type:  "content_block_delta",
+			Index: intPtr(0),
+			Delta: mustMarshal(types.TextDelta{Type: "text_delta", Text: " world"}),
+		},
+		{
+			Type:  "content_block_stop",
+			Index: intPtr(0),
+		},
+		{
+			Type: "message_stop",
+		},
+	}
+
+	for i, e := range events {
+		data, _ := json.Marshal(e)
+		err := transformer.Transform(&sse.Event{Data: string(data)})
+		if err != nil {
+			t.Errorf("Transform event %d returned error: %v", i, err)
+		}
+	}
+
+	result := buf.String()
+
+	// Verify all expected events are present
+	expectedEvents := []string{
+		`"type":"response.created"`,
+		`"type":"response.content_part.added"`,
+		`"type":"response.output_text.delta"`,
+		`"type":"response.content_part.done"`,
+		`"type":"response.completed"`,
+	}
+
+	for _, expected := range expectedEvents {
+		if !strings.Contains(result, expected) {
+			t.Errorf("Result should contain %s", expected)
+		}
+	}
+}
+
+// TestResponsesTransformer_FullFlowWithTool tests complete flow with tool call.
+func TestResponsesTransformer_FullFlowWithTool(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	events := []types.Event{
+		{
+			Type: "message_start",
+			Message: &types.MessageInfo{
+				ID:    "msg_abc",
+				Model: "claude-3",
+			},
+		},
+		{
+			Type:         "content_block_start",
+			Index:        intPtr(0),
+			ContentBlock: mustMarshal(types.ContentBlock{Type: "tool_use", ID: "toolu_123", Name: "get_weather"}),
+		},
+		{
+			Type:  "content_block_delta",
+			Index: intPtr(0),
+			Delta: mustMarshal(types.InputJSONDelta{Type: "input_json_delta", PartialJSON: `{"location":`}),
+		},
+		{
+			Type:  "content_block_delta",
+			Index: intPtr(0),
+			Delta: mustMarshal(types.InputJSONDelta{Type: "input_json_delta", PartialJSON: `"San Francisco"}`}),
+		},
+		{
+			Type:  "content_block_stop",
+			Index: intPtr(0),
+		},
+		{
+			Type: "message_stop",
+		},
+	}
+
+	for _, e := range events {
+		data, _ := json.Marshal(e)
+		transformer.Transform(&sse.Event{Data: string(data)})
+	}
+
+	result := buf.String()
+
+	// Verify tool call events
+	if !strings.Contains(result, `"type":"function_call"`) {
+		t.Error("Result should contain function_call type")
+	}
+
+	if !strings.Contains(result, `"type":"response.function_call_arguments.delta"`) {
+		t.Error("Result should contain function_call_arguments.delta")
+	}
+}
+
+// BenchmarkResponsesTransformer_Transform benchmarks the transformer.
+func BenchmarkResponsesTransformer_Transform(b *testing.B) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	event := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(event)
+	sseEvent := &sse.Event{Data: string(data)}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		buf.Reset()
+		transformer.Transform(sseEvent)
+	}
+}
+
+// Helper function to marshal to RawMessage
+func mustMarshal(v interface{}) json.RawMessage {
+	data, _ := json.Marshal(v)
+	return json.RawMessage(data)
+}
