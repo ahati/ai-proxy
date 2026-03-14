@@ -330,7 +330,15 @@ func TestAnthropicToOpenAIHandler_TransformRequest_NilInput(t *testing.T) {
 // TestAnthropicToOpenAIHandler_UpstreamURL tests upstream URL.
 func TestAnthropicToOpenAIHandler_UpstreamURL(t *testing.T) {
 	cfg := &config.Config{
-		AnthropicUpstreamURL: "https://api.anthropic.com/v1/messages",
+		AppConfig: &config.Schema{
+			Providers: []config.Provider{
+				{
+					Name:    "anthropic",
+					Type:    "anthropic",
+					BaseURL: "https://api.anthropic.com/v1/messages",
+				},
+			},
+		},
 	}
 	handler := &AnthropicToOpenAIHandler{cfg: cfg}
 
@@ -343,7 +351,15 @@ func TestAnthropicToOpenAIHandler_UpstreamURL(t *testing.T) {
 // TestAnthropicToOpenAIHandler_ResolveAPIKey tests API key resolution.
 func TestAnthropicToOpenAIHandler_ResolveAPIKey(t *testing.T) {
 	cfg := &config.Config{
-		AnthropicAPIKey: "test-api-key",
+		AppConfig: &config.Schema{
+			Providers: []config.Provider{
+				{
+					Name:   "anthropic",
+					Type:   "anthropic",
+					APIKey: "test-api-key",
+				},
+			},
+		},
 	}
 	handler := &AnthropicToOpenAIHandler{cfg: cfg}
 
@@ -669,8 +685,16 @@ func TestConvertResponsesTools_NilFunction(t *testing.T) {
 // TestNewAnthropicToOpenAIHandler tests handler creation.
 func TestNewAnthropicToOpenAIHandler(t *testing.T) {
 	cfg := &config.Config{
-		AnthropicUpstreamURL: "https://api.anthropic.com/v1/messages",
-		AnthropicAPIKey:      "test-key",
+		AppConfig: &config.Schema{
+			Providers: []config.Provider{
+				{
+					Name:    "anthropic",
+					Type:    "anthropic",
+					BaseURL: "https://api.anthropic.com/v1/messages",
+					APIKey:  "test-key",
+				},
+			},
+		},
 	}
 
 	handler := NewAnthropicToOpenAIHandler(cfg)

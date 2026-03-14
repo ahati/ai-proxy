@@ -75,7 +75,7 @@ func (h *BridgeHandler) TransformRequest(body []byte) ([]byte, error) {
 //
 // @pre h.cfg != nil
 func (h *BridgeHandler) UpstreamURL() string {
-	return h.cfg.OpenAIUpstreamURL
+	return h.cfg.GetOpenAIUpstreamURL()
 }
 
 // ResolveAPIKey returns the configured OpenAI upstream API key.
@@ -86,7 +86,7 @@ func (h *BridgeHandler) UpstreamURL() string {
 //
 // @pre h.cfg != nil
 func (h *BridgeHandler) ResolveAPIKey(c *gin.Context) string {
-	return h.cfg.OpenAIUpstreamAPIKey
+	return h.cfg.GetOpenAIUpstreamAPIKey()
 }
 
 // ForwardHeaders copies X-* and Extra headers to the upstream request.
