@@ -7,6 +7,7 @@
 package capture
 
 import (
+	"ai-proxy/logging"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -89,6 +90,7 @@ func (s *Storage) Write(recorder *Recorder) error {
 	// Create directory with standard permissions if it doesn't exist
 	// MkdirAll creates all parent directories as needed
 	if err := os.MkdirAll(dir, dirPerms); err != nil {
+		logging.ErrorMsg("Failed to create log directory %s: %v", dir, err)
 		return fmt.Errorf("create log dir: %w", err)
 	}
 
@@ -111,6 +113,7 @@ func (s *Storage) Write(recorder *Recorder) error {
 	// This is a safety measure in case the Stat check above raced
 	file, err := os.OpenFile(fullpath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, filePerms)
 	if err != nil {
+		logging.ErrorMsg("Failed to create log file %s: %v", fullpath, err)
 		return fmt.Errorf("create log file: %w", err)
 	}
 	// Ensure file is closed even if encoding fails
@@ -122,9 +125,11 @@ func (s *Storage) Write(recorder *Recorder) error {
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(logData); err != nil {
+		logging.ErrorMsg("Failed to encode log data: %v", err)
 		return fmt.Errorf("encode log data: %w", err)
 	}
 
+	logging.InfoMsg("Captured request written to: %s", fullpath)
 	return nil
 }
 

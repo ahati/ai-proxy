@@ -17,7 +17,7 @@ func TestMessageRequest(t *testing.T) {
 				Model:    "claude-3",
 				Messages: []MessageInput{{Role: "user", Content: "hello"}},
 			},
-			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
+			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"hello"}],"max_tokens":0}`,
 		},
 		{
 			name: "full request",
@@ -46,7 +46,7 @@ func TestMessageRequest(t *testing.T) {
 					},
 				},
 			},
-			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"test"}],"tools":[{"name":"search","description":"Search the web","input_schema":{"type":"object"}}]}`,
+			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"test"}],"max_tokens":0,"tools":[{"name":"search","description":"Search the web","input_schema":{"type":"object"}}]}`,
 		},
 		{
 			name: "system as array",
@@ -57,7 +57,7 @@ func TestMessageRequest(t *testing.T) {
 					map[string]interface{}{"type": "text", "text": "You are helpful"},
 				},
 			},
-			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"hi"}],"system":[{"text":"You are helpful","type":"text"}]}`,
+			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"hi"}],"max_tokens":0,"system":[{"text":"You are helpful","type":"text"}]}`,
 		},
 		{
 			name: "with metadata",
@@ -66,7 +66,7 @@ func TestMessageRequest(t *testing.T) {
 				Messages: []MessageInput{{Role: "user", Content: "test"}},
 				Metadata: json.RawMessage(`{"user_id":"123"}`),
 			},
-			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"test"}],"metadata":{"user_id":"123"}}`,
+			wantJSON: `{"model":"claude-3","messages":[{"role":"user","content":"test"}],"max_tokens":0,"metadata":{"user_id":"123"}}`,
 		},
 	}
 

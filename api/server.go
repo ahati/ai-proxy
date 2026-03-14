@@ -96,6 +96,11 @@ func (s *Server) setupRoutes() {
 	// Bridge endpoint - converts Anthropic format requests to OpenAI format
 	// before forwarding to upstream, then converts responses back to Anthropic format.
 	s.router.POST("/v1/openai-to-anthropic/messages", handlers.NewBridgeHandler(s.config))
+
+	// Anthropic-to-OpenAI Responses endpoint - converts OpenAI Responses API format requests
+	// to Anthropic format before forwarding to upstream, then converts responses back to
+	// OpenAI Responses API format.
+	s.router.POST("/v1/anthropic-to-openai/responses", handlers.NewAnthropicToOpenAIHandler(s.config))
 }
 
 // Use adds middleware to the server's router chain.

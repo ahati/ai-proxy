@@ -27,6 +27,11 @@ func main() {
 
 	// Initialize storage for request capture if logging is enabled
 	storage := api.InitStorage(cfg.SSELogDir)
+	if storage != nil {
+		logging.InfoMsg("SSE capture enabled, logging to: %s", cfg.SSELogDir)
+	} else {
+		logging.InfoMsg("SSE capture disabled (use --sse-log-dir to enable)")
+	}
 
 	// Create server with loaded configuration
 	// Middleware is added first so it applies to all routes

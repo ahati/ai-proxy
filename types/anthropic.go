@@ -15,13 +15,17 @@ type MessageRequest struct {
 	Messages []MessageInput `json:"messages"`
 	// MaxTokens is the maximum number of tokens to generate.
 	// Required for Anthropic API; unlike OpenAI, this is mandatory.
-	MaxTokens int `json:"max_tokens,omitempty"`
+	MaxTokens int `json:"max_tokens"`
 	// Stream enables streaming responses when true.
 	// Default: false. Set to true for SSE streaming responses.
 	Stream bool `json:"stream,omitempty"`
 	// Tools is a list of tools the model may call.
 	// Optional; each tool defines a function the model can invoke.
 	Tools []ToolDef `json:"tools,omitempty"`
+	// ToolChoice specifies how the model should choose which tool to use.
+	// Optional; defaults to auto if not specified.
+	// Values: {"type": "auto"}, {"type": "any"}, {"type": "tool", "name": "..."}
+	ToolChoice *ToolChoice `json:"tool_choice,omitempty"`
 	// System provides system-level instructions.
 	// Can be a string or structured content blocks.
 	System interface{} `json:"system,omitempty"`
@@ -173,6 +177,15 @@ type AnthropicUsage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
+// ToolChoice specifies how the model should choose which tool to use.
+type ToolChoice struct {
+	// Type is the choice type: "auto", "any", or "tool"
+	Type string `json:"type"`
+	// Name is the tool name when Type is "tool"
+	Name string `json:"name,omitempty"`
+}
+
+// AnthropicErrorResponse represents an error response from the Anthropic API.
 type AnthropicErrorResponse struct {
 	// Type identifies the error response type.
 	// Typically "error" for error responses.
