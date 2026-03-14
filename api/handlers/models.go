@@ -123,7 +123,11 @@ func (h *ModelsHandler) resolveAPIKey(c *gin.Context) string {
 // @post Returned URL ends with "models" path.
 func (h *ModelsHandler) buildModelsURL() string {
 	url := h.cfg.OpenAIUpstreamURL()
+	// Trim trailing slash for consistent handling
+	url = strings.TrimSuffix(url, "/")
 	// Replace chat/completions path with models
 	// This assumes upstream URL is configured to the completions endpoint
-	return strings.TrimSuffix(url, "chat/completions") + "models"
+	url = strings.TrimSuffix(url, "/chat/completions")
+	// Ensure we have the /v1/models path
+	return url + "/models"
 }

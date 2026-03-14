@@ -12,6 +12,7 @@ import (
 
 	"ai-proxy/capture"
 	"ai-proxy/config"
+	"ai-proxy/router"
 	"ai-proxy/transform"
 
 	"github.com/gin-gonic/gin"
@@ -639,7 +640,7 @@ func TestProxyRequest_BadUpstreamURL(t *testing.T) {
 }
 
 func TestNewCompletionsHandler(t *testing.T) {
-	cfg := config.LoadConfig(&config.SchemaConfig{
+	schemaCfg := &config.SchemaConfig{
 		Providers: []config.Provider{
 			{
 				Name:    "test-openai",
@@ -648,16 +649,20 @@ func TestNewCompletionsHandler(t *testing.T) {
 				APIKey:  "test-key",
 			},
 		},
-	})
+		Models: map[string]config.ModelConfig{
+			"test-model": {Provider: "test-openai", Model: "test-model"},
+		},
+	}
+	r, _ := router.NewRouter(schemaCfg)
 
-	handler := NewCompletionsHandler(cfg)
+	handler := NewCompletionsHandler(r)
 	if handler == nil {
 		t.Error("expected non-nil handler")
 	}
 }
 
 func TestNewMessagesHandler(t *testing.T) {
-	cfg := config.LoadConfig(&config.SchemaConfig{
+	schemaCfg := &config.SchemaConfig{
 		Providers: []config.Provider{
 			{
 				Name:    "test-anthropic",
@@ -666,16 +671,20 @@ func TestNewMessagesHandler(t *testing.T) {
 				APIKey:  "test-key",
 			},
 		},
-	})
+		Models: map[string]config.ModelConfig{
+			"test-model": {Provider: "test-anthropic", Model: "test-model"},
+		},
+	}
+	r, _ := router.NewRouter(schemaCfg)
 
-	handler := NewMessagesHandler(cfg)
+	handler := NewMessagesHandler(r)
 	if handler == nil {
 		t.Error("expected non-nil handler")
 	}
 }
 
 func TestNewBridgeHandler(t *testing.T) {
-	cfg := config.LoadConfig(&config.SchemaConfig{
+	schemaCfg := &config.SchemaConfig{
 		Providers: []config.Provider{
 			{
 				Name:    "test-openai",
@@ -684,9 +693,13 @@ func TestNewBridgeHandler(t *testing.T) {
 				APIKey:  "test-key",
 			},
 		},
-	})
+		Models: map[string]config.ModelConfig{
+			"test-model": {Provider: "test-openai", Model: "test-model"},
+		},
+	}
+	r, _ := router.NewRouter(schemaCfg)
 
-	handler := NewBridgeHandler(cfg)
+	handler := NewBridgeHandler(r)
 	if handler == nil {
 		t.Error("expected non-nil handler")
 	}
