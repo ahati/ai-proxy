@@ -7,7 +7,6 @@ import (
 	"io"
 	"strings"
 
-	"ai-proxy/logging"
 	"ai-proxy/types"
 
 	"github.com/tmaxmax/go-sse"
@@ -144,7 +143,6 @@ func (t *ChatToAnthropicTransformer) Transform(event *sse.Event) error {
 
 	// Handle [DONE] marker - trigger Close() which handles all cleanup
 	if event.Data == "[DONE]" {
-		logging.DebugMsg("Transform: received [DONE], calling Close()")
 		return t.Close()
 	}
 
@@ -166,7 +164,6 @@ func (t *ChatToAnthropicTransformer) handleChunk(chunk types.Chunk) error {
 		t.messageID = chunk.ID
 		t.model = chunk.Model
 		t.started = true
-		logging.DebugMsg("handleChunk: first chunk, ID=%s, model=%s", t.messageID, t.model)
 
 		// Extract usage if available in first chunk (some providers include it)
 		inputTokens := 0
@@ -202,7 +199,6 @@ func (t *ChatToAnthropicTransformer) handleChunk(chunk types.Chunk) error {
 		if chunk.Usage != nil {
 			t.promptTokens = chunk.Usage.PromptTokens
 			t.completionTokens = chunk.Usage.CompletionTokens
-			logging.DebugMsg("handleChunk: usage chunk, prompt=%d, completion=%d, finishReason=%s", t.promptTokens, t.completionTokens, t.finishReason)
 			// Now emit message_delta with the stored finish_reason and usage
 			if t.finishReason != "" {
 				t.handleFinishReason(t.finishReason, chunk.Usage)
@@ -218,7 +214,6 @@ func (t *ChatToAnthropicTransformer) handleChunk(chunk types.Chunk) error {
 	// Handle finish reason - store it for later emission with usage
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
 		t.finishReason = *choice.FinishReason
-		logging.DebugMsg("handleChunk: finish reason=%s, waiting for usage", t.finishReason)
 		return nil
 	}
 
@@ -250,10 +245,8 @@ func (t *ChatToAnthropicTransformer) handleToolCalls(toolCalls []types.ToolCall)
 		// Check if this is a new tool call
 		state, exists := t.toolCalls[tc.Index]
 		if !exists {
-			logging.DebugMsg("handleToolCalls: new tool idx=%d, id=%s, name=%s", tc.Index, tc.ID, tc.Function.Name)
 			// Close any open content block (thinking/text) before starting tool_use
 			if t.contentOpen {
-				logging.DebugMsg("handleToolCalls: closing content block idx=%d", t.blockIndex-1)
 				if err := t.writeEvent("content_block_stop", map[string]interface{}{
 					"index": t.blockIndex - 1,
 				}); err != nil {
@@ -305,13 +298,9 @@ func (t *ChatToAnthropicTransformer) handleFinishReason(reason string, usage *ty
 		stopReason = "end_turn"
 	}
 
-	logging.DebugMsg("handleFinishReason: reason=%s -> stopReason=%s, contentOpen=%v, toolCalls=%d, usage=%d/%d",
-		reason, stopReason, t.contentOpen, len(t.toolCalls), t.promptTokens, t.completionTokens)
-
 	// Close open content block (thinking/text) first
 	if t.contentOpen {
 		contentBlockIndex := t.blockIndex - 1
-		logging.DebugMsg("handleFinishReason: closing content block idx=%d", contentBlockIndex)
 		if err := t.writeEvent("content_block_stop", map[string]interface{}{
 			"index": contentBlockIndex,
 		}); err != nil {
@@ -322,7 +311,6 @@ func (t *ChatToAnthropicTransformer) handleFinishReason(reason string, usage *ty
 
 	// Close tool call blocks with correct block indices
 	for _, state := range t.toolCalls {
-		logging.DebugMsg("handleFinishReason: closing tool_use block idx=%d", state.blockIdx)
 		if err := t.writeEvent("content_block_stop", map[string]interface{}{
 			"index": state.blockIdx,
 		}); err != nil {
@@ -344,7 +332,6 @@ func (t *ChatToAnthropicTransformer) handleFinishReason(reason string, usage *ty
 		"output_tokens": t.completionTokens,
 	}
 
-	logging.DebugMsg("handleFinishReason: emitting message_delta")
 	if err := t.writeEvent("message_delta", eventData); err != nil {
 		return err
 	}
@@ -365,7 +352,6 @@ func (t *ChatToAnthropicTransformer) emitUsage(usage *types.Usage) error {
 func (t *ChatToAnthropicTransformer) emitTextDelta(text string) error {
 	// If we have a thinking block open, close it and start a text block
 	if t.contentOpen && t.contentType == "thinking" {
-		logging.DebugMsg("emitTextDelta: closing thinking block at idx=%d, starting text block", t.blockIndex-1)
 		if err := t.writeEvent("content_block_stop", map[string]interface{}{
 			"index": t.blockIndex - 1,
 		}); err != nil {
@@ -414,7 +400,6 @@ func (t *ChatToAnthropicTransformer) emitTextStart(index int) error {
 func (t *ChatToAnthropicTransformer) emitThinkingDelta(thinking string) error {
 	// If we have a text block open, close it and start a thinking block
 	if t.contentOpen && t.contentType == "text" {
-		logging.DebugMsg("emitThinkingDelta: closing text block at idx=%d, starting thinking block", t.blockIndex-1)
 		if err := t.writeEvent("content_block_stop", map[string]interface{}{
 			"index": t.blockIndex - 1,
 		}); err != nil {
@@ -516,20 +501,14 @@ func (t *ChatToAnthropicTransformer) Flush() error {
 // Close flushes and emits final events.
 // This handles graceful shutdown when stream is cut off mid-stream.
 func (t *ChatToAnthropicTransformer) Close() error {
-	logging.DebugMsg("Close: started=%v, messageStopSent=%v, deltaSent=%v, contentOpen=%v, blockIndex=%d, toolCalls=%d, finishReason=%s",
-		t.started, t.messageStopSent, t.deltaSent, t.contentOpen, t.blockIndex, len(t.toolCalls), t.finishReason)
-
 	if !t.started || t.messageStopSent {
-		logging.DebugMsg("Close: early return - started=%v, messageStopSent=%v", t.started, t.messageStopSent)
 		return nil
 	}
 
 	// Only close blocks and emit message_delta if not already done by handleFinishReason
 	if !t.deltaSent {
-		logging.DebugMsg("Close: delta not sent yet, closing blocks and emitting message_delta")
 		// Close any open content block (thinking/text)
 		if t.contentOpen {
-			logging.DebugMsg("Close: closing content block idx=%d", t.blockIndex-1)
 			if err := t.writeEvent("content_block_stop", map[string]interface{}{
 				"index": t.blockIndex - 1,
 			}); err != nil {
@@ -540,7 +519,6 @@ func (t *ChatToAnthropicTransformer) Close() error {
 
 		// Close all tool call blocks
 		for _, state := range t.toolCalls {
-			logging.DebugMsg("Close: closing tool_use block idx=%d", state.blockIdx)
 			if err := t.writeEvent("content_block_stop", map[string]interface{}{
 				"index": state.blockIdx,
 			}); err != nil {
@@ -554,7 +532,6 @@ func (t *ChatToAnthropicTransformer) Close() error {
 			if len(t.toolCalls) > 0 {
 				stopReason = "tool_use"
 			}
-			logging.DebugMsg("Close: emitting message_delta with stop_reason=%s, input=%d, output=%d", stopReason, t.promptTokens, t.completionTokens)
 			eventData := map[string]interface{}{
 				"delta": map[string]interface{}{
 					"stop_reason":   stopReason,
@@ -571,7 +548,6 @@ func (t *ChatToAnthropicTransformer) Close() error {
 		}
 	}
 
-	logging.DebugMsg("Close: emitting message_stop")
 	t.messageStopSent = true
 	return t.writeEvent("message_stop", nil)
 }
