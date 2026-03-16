@@ -48,6 +48,11 @@ func (c *ResponsesToChatConverter) convertRequest(req *types.ResponsesRequest) *
 		},
 	}
 
+	// Convert parallel_tool_calls if set
+	if req.ParallelToolCalls {
+		chatReq.ParallelToolCalls = &req.ParallelToolCalls
+	}
+
 	// Convert instructions to system message
 	if req.Instructions != "" {
 		chatReq.System = req.Instructions
@@ -362,7 +367,7 @@ func (c *ResponsesToChatConverter) extractTextFromParts(parts []interface{}) str
 		}
 		partType, _ := partMap["type"].(string)
 		switch partType {
-		case "input_text", "text":
+		case "input_text", "text", "output_text":
 			if text, ok := partMap["text"].(string); ok {
 				if result.Len() > 0 {
 					result.WriteString("\n")
@@ -381,7 +386,7 @@ func (c *ResponsesToChatConverter) hasNonTextParts(parts []interface{}) bool {
 			continue
 		}
 		partType, _ := partMap["type"].(string)
-		if partType != "input_text" && partType != "text" {
+		if partType != "input_text" && partType != "text" && partType != "output_text" {
 			return true
 		}
 	}
@@ -406,8 +411,8 @@ func (c *ResponsesToChatConverter) convertContentParts(parts []interface{}) []in
 
 		partType, _ := partMap["type"].(string)
 		switch partType {
-		case "input_text":
-			// Convert input_text to text
+		case "input_text", "output_text":
+			// Convert input_text and output_text to text
 			if text, ok := partMap["text"].(string); ok {
 				result = append(result, map[string]interface{}{
 					"type": "text",
@@ -588,7 +593,7 @@ func (t *ResponsesToChatTransformer) handleOutputItemAdded(event *types.Response
 	if event.OutputItem.Type == "function_call" {
 		t.currentToolCall = &responsesToolCallState{
 			id:   event.OutputItem.ID,
-			name: event.OutputItem.CallID,
+			name: event.OutputItem.Name,
 		}
 		t.toolCallIndex++
 	}

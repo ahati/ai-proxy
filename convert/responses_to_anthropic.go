@@ -78,7 +78,7 @@ func TransformResponsesToAnthropic(body []byte) ([]byte, error) {
 	anthReq.Tools = convertResponsesToolsToAnthropic(openReq.Tools)
 
 	// Convert tool_choice
-	anthReq.ToolChoice = convertToolChoiceToAnthropic(openReq.ToolChoice)
+	anthReq.ToolChoice = ConvertToolChoiceOpenAIToAnthropic(openReq.ToolChoice)
 
 	return json.Marshal(anthReq)
 }
@@ -189,10 +189,11 @@ func extractContentFromInput(content interface{}) string {
 		var result strings.Builder
 		for _, part := range arr {
 			if partMap, ok := part.(map[string]interface{}); ok {
-				// Extract text from input_text or input_image parts
+				// Extract text from various content part types
 				partType, _ := partMap["type"].(string)
 				switch partType {
-				case "input_text":
+				case "input_text", "output_text":
+					// Both input_text and output_text contain text content
 					if text, ok := partMap["text"].(string); ok {
 						if result.Len() > 0 {
 							result.WriteString("\n")
@@ -244,40 +245,3 @@ func convertResponsesToolsToAnthropic(openTools []types.ResponsesTool) []types.T
 	return anthTools
 }
 
-// convertToolChoiceToAnthropic converts OpenAI tool_choice to Anthropic format.
-func convertToolChoiceToAnthropic(toolChoice interface{}) *types.ToolChoice {
-	if toolChoice == nil {
-		return nil
-	}
-
-	// Handle string values
-	if s, ok := toolChoice.(string); ok {
-		switch s {
-		case "none":
-			return nil
-		case "auto":
-			return &types.ToolChoice{Type: "auto"}
-		case "required":
-			return &types.ToolChoice{Type: "any"}
-		default:
-			return &types.ToolChoice{Type: "auto"}
-		}
-	}
-
-	// Handle object format: {"type": "function", "function": {"name": "xyz"}}
-	if obj, ok := toolChoice.(map[string]interface{}); ok {
-		objType, _ := obj["type"].(string)
-		if objType == "function" {
-			if fn, ok := obj["function"].(map[string]interface{}); ok {
-				if name, ok := fn["name"].(string); ok {
-					return &types.ToolChoice{
-						Type: "tool",
-						Name: name,
-					}
-				}
-			}
-		}
-	}
-
-	return &types.ToolChoice{Type: "auto"}
-}

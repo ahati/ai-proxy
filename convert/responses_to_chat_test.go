@@ -635,6 +635,51 @@ func TestResponsesToChatConverter_ContentParts(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "output_text content (assistant message history)",
+			input: `{
+				"model": "gpt-4o",
+				"input": [
+					{
+						"type": "message",
+						"role": "user",
+						"content": [{"type": "input_text", "text": "Hello"}]
+					},
+					{
+						"type": "message",
+						"role": "assistant",
+						"content": [{"type": "output_text", "text": "Hi there! How can I help?"}]
+					}
+				]
+			}`,
+			validate: func(t *testing.T, output []byte) {
+				var req types.ChatCompletionRequest
+				if err := json.Unmarshal(output, &req); err != nil {
+					t.Fatalf("Failed to parse output: %v", err)
+				}
+				if len(req.Messages) != 2 {
+					t.Errorf("Expected 2 messages, got %d", len(req.Messages))
+					return
+				}
+				// First message should be user
+				if req.Messages[0].Role != "user" {
+					t.Errorf("Expected first message role 'user', got %s", req.Messages[0].Role)
+				}
+				// Second message should be assistant with the output_text content preserved
+				if req.Messages[1].Role != "assistant" {
+					t.Errorf("Expected second message role 'assistant', got %s", req.Messages[1].Role)
+				}
+				// Verify content was extracted from output_text
+				content, ok := req.Messages[1].Content.(string)
+				if !ok {
+					t.Errorf("Expected content to be string, got %T", req.Messages[1].Content)
+					return
+				}
+				if content != "Hi there! How can I help?" {
+					t.Errorf("Expected content 'Hi there! How can I help?', got %q", content)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
