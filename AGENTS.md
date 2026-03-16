@@ -5,16 +5,13 @@ Go-based HTTP proxy for LLM APIs with OpenAI and Anthropic compatibility.
 ## Build Commands
 
 ```bash
-# Build and run
-go build -o ai-proxy . && ./ai-proxy
-
-# Run with environment variables
-PORT=8081 UPSTREAM_API_KEY=key ./ai-proxy
+# Build and run (requires config file)
+go build -o ai-proxy . && ./ai-proxy --config-file config.json
 
 # Run tests
 go test ./...
 go test -v ./...
-go test -v -run TestFunctionName ./...
+go test -v -run TestFunctionName ./...    # Run single test
 go test -cover ./...
 
 # Format and lint
@@ -30,26 +27,29 @@ go mod tidy
 - **Simplicity**: Prefer simple, readable code over clever abstractions
 - **Idiomatic Go**: Follow standard Go conventions and patterns
 - **Minimal dependencies**: Only add external dependencies when necessary
-- **No comments unless requested**: Do not add comments unless explicitly asked
+- **Documentation**: Keep code well documented with clear doc comments on exported functions and types
+- **DRY**: Do not repeat yourself - extract common logic into reusable functions
+- **SOLID**: Follow SOLID principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion)
+
+### Quality Requirements
+
+- **Code coverage**: Must be >90% for all new code
+- **Defect fixing**: Always reproduce the defect with a test before fixing. Clarify the expected behavior with the user if ambiguous
 
 ### Imports
 
-Group imports in order: standard library, external packages (github.com), then internal packages (ai-proxy/...). Use blank lines between groups. No import aliases unless necessary.
+Group imports: standard library, external packages (github.com), then internal packages (ai-proxy/...). Blank lines between groups. No import aliases unless necessary.
 
 ```go
 import (
     "context"
     "fmt"
     "io"
-    "net/http"
 
     "github.com/gin-gonic/gin"
     "github.com/tmaxmax/go-sse"
 
-    "ai-proxy/api"
     "ai-proxy/config"
-    "ai-proxy/logging"
-    "ai-proxy/proxy"
     "ai-proxy/types"
 )
 ```
@@ -59,17 +59,17 @@ import (
 - Use `go fmt` for all code formatting
 - Indent with tabs, not spaces
 - Maximum line length: 100 characters (soft limit)
-- Add blank line between top-level declarations
+- Blank line between top-level declarations
 
 ### Naming Conventions
 
 - **Variables/Functions**: `camelCase` (e.g., `apiKey`, `streamResponse`)
+- **Types/Interfaces**: `PascalCase` (e.g., `Config`, `SSETransformer`)
 - **Constants**: `PascalCase` or `camelCase` for unexported
-- **Types/Interfaces**: `PascalCase` (e.g., `Config`)
-- **Packages**: lowercase, short, no underscores (e.g., `ai-proxy`)
-- **Files**: lowercase with underscores (e.g., `completions.go`)
+- **Packages**: lowercase, short, no underscores
+- **Files**: lowercase with underscores (e.g., `chat_to_responses.go`)
 - **Exported/Unexported**: Uppercase/lowercase first letter
-- **Acronyms**: Use all caps for acronyms > 2 letters (e.g., `APIKey`)
+- **Acronyms**: All caps for acronyms > 2 letters (e.g., `APIKey`, `SSETransformer`)
 
 ### Types
 
@@ -82,7 +82,6 @@ import (
 - Always handle errors explicitly; never ignore with `_`
 - Return errors early; avoid deep nesting
 - Use `fmt.Errorf` with `%w` for wrapping errors
-- Log errors before returning when appropriate
 
 ```go
 func readBody(c *gin.Context) ([]byte, error) {
@@ -96,72 +95,71 @@ func readBody(c *gin.Context) ([]byte, error) {
 
 ### Context
 
-- Pass `context.Context` as the first parameter to functions that make HTTP requests or do I/O
-- Use `c.Request.Context()` to get the request's context
+- Pass `context.Context` as first parameter for functions making HTTP requests or I/O
+- Use `c.Request.Context()` to get request context in handlers
 - Respect context cancellation in long-running operations
 
 ### HTTP Handlers
 
 - Use Gin framework for HTTP handlers
 - Return appropriate HTTP status codes
-- Log errors with the logging package
 - Always close response bodies
 
 ### Testing
 
-- Tests in `*_test.go` files in the same package
+- Tests in `*_test.go` files in same package
 - Use table-driven tests when testing multiple cases
-- Test naming: `TestFunctionName_Scenario`
+- Test naming: `TestFunctionName_Scenario` (e.g., `TestChatToResponsesTransformer_ToolCalls`)
 - Use `t.Fatalf` or `t.Errorf` for failures
+
+```go
+func TestFunctionName_Scenario(t *testing.T) {
+    tests := []struct {
+        name string
+        input string
+        want string
+    }{
+        {name: "case 1", input: "foo", want: "bar"},
+    }
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            if got := function(tt.input); got != tt.want {
+                t.Errorf("function() = %v, want %v", got, tt.want)
+            }
+        })
+    }
+}
+```
 
 ### Configuration
 
-- Use environment variables for configuration
-- Provide sensible defaults
-- Use a config struct loaded at startup
+- Configuration loaded from JSON file (required) via `--config-file` flag or `CONFIG_FILE` env var
+- Environment variables: `PORT`, `SSELOG_DIR`
+- Use config struct loaded at startup via `config.Load()`
 
 ### Logging
 
 - Use `ai-proxy/logging` package: `logging.InfoMsg` and `logging.ErrorMsg`
 
-### Dependencies
-
-- Run `go mod tidy` after adding/removing dependencies
-- Avoid dependencies for trivial functionality
-
-### Project Structure
+## Project Structure
 
 ```
-ai-proxy/
-├── main.go           # Entry point, route setup
-├── api/              # HTTP server, handlers, and middleware
-│   ├── handlers/     # HTTP endpoint handlers
-│   ├── middleware.go # Capture middleware
-│   └── server.go     # Server setup and routing
-├── capture/          # Request/response capture and logging
-│   ├── context.go    # Request context utilities
-│   ├── recorder.go   # Recording requests/responses
-│   ├── storage.go    # Storage for captured data
-│   └── writer.go     # Writing captured data to files
-├── config/           # Configuration loading
-├── logging/          # Logging utilities
-├── proxy/            # Upstream API client
-│   ├── client.go     # HTTP client for upstream APIs
-│   └── request.go    # Request building
-├── transform/        # Format transformations
-│   ├── interface.go  # Transformer interface
-│   └── toolcall/     # Tool call transformations
-└── types/            # Shared types
-    ├── anthropic.go  # Anthropic API types
-    ├── openai.go     # OpenAI API types
-    └── sse.go        # SSE types
+├── main.go              # Entry point
+├── api/
+│   ├── server.go        # Server setup and routing
+│   ├── middleware.go   # Capture middleware
+│   └── handlers/       # HTTP endpoint handlers
+├── capture/             # Request/response capture and logging
+├── config/              # Configuration loading (JSON + flags + env)
+├── convert/             # Format conversions (OpenAI↔Anthropic↔Responses)
+├── logging/             # Logging utilities
+├── proxy/               # Upstream API client
+├── router/              # Model-to-provider routing
+├── tokens/              # Token counting utilities
+├── transform/           # SSE stream transformations
+│   └── toolcall/       # Tool call parsing and formatting
+└── types/               # Shared types (OpenAI, Anthropic, SSE)
 ```
-
-### Git Conventions
-
-- Do NOT commit unless explicitly asked
-- Run `go vet ./...` and `go fmt ./...` before commits
-- Ensure build passes: `go build ./...`
 
 ## API Endpoints
 
@@ -169,9 +167,9 @@ ai-proxy/
 |--------|------|-------------|
 | GET | `/health` | Health check |
 | GET | `/v1/models` | List available models |
-| POST | `/v1/chat/completions` | Chat completions (streaming) |
-| POST | `/v1/messages` | Native Anthropic messages |
-| POST | `/v1/openai-to-anthropic/messages` | OpenAI→Anthropic bridge |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat completions |
+| POST | `/v1/messages` | Anthropic Messages API |
+| POST | `/v1/responses` | OpenAI Responses API |
 
 ## Common Tasks
 
@@ -183,123 +181,10 @@ ai-proxy/
 ### Modifying SSE handling
 
 - SSE parsing via `github.com/tmaxmax/go-sse`
-- Use `sse.Read()` in `api/handlers/completions.go`
+- Transformers implement `transform.SSETransformer` interface
 
-## Testing
+## Git Conventions
 
-### Manual Testing with curl
-
-#### OpenAI Compatible Endpoint (`/v1/chat/completions`)
-
-```bash
-# Start server with logging
-PORT=8081 SSELOG_DIR=./test_logs ./ai-proxy
-
-# Basic chat request
-curl -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "moonshotai/Kimi-K2.5-TEE",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": true
-  }'
-
-# With tool calls
-curl -s -X POST http://localhost:8081/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "moonshotai/Kimi-K2.5-TEE",
-    "messages": [{"role": "user", "content": "List files in current directory"}],
-    "tools": [{
-      "type": "function",
-      "function": {
-        "name": "bash",
-        "description": "Execute bash commands",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "command": {"type": "string", "description": "The bash command"}
-          },
-          "required": ["command"]
-        }
-      }
-    }],
-    "stream": true
-  }'
-```
-
-**Model**: `moonshotai/Kimi-K2.5-TEE`
-
-#### Anthropic Endpoint (`/v1/messages`)
-
-```bash
-# Start server with logging
-PORT=8081 SSELOG_DIR=./test_logs ./ai-proxy
-
-# Basic chat request
-curl -s -X POST http://localhost:8081/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "Anthropic-Version: 2023-06-01" \
-  -d '{
-    "model": "kimi-k2.5",
-    "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": true
-  }'
-
-# With tool calls
-curl -s -X POST http://localhost:8081/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "Anthropic-Version: 2023-06-01" \
-  -d '{
-    "model": "kimi-k2.5",
-    "max_tokens": 1024,
-    "messages": [{"role": "user", "content": "List files using bash"}],
-    "tools": [{
-      "name": "bash",
-      "description": "Execute bash commands",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "command": {"type": "string", "description": "The bash command"}
-        },
-        "required": ["command"]
-      }
-    }],
-    "stream": true
-  }'
-```
-
-**Model**: `kimi-k2.5`
-
-### Request Capture/Logging
-
-When `SSELOG_DIR` is set, all requests are captured to structured JSON files:
-
-```bash
-# Start with logging enabled
-PORT=8081 SSELOG_DIR=./test_logs ./ai-proxy
-
-# Make requests (no X-Request-ID needed - ID extracted from SSE response)
-curl -X POST http://localhost:8081/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "moonshotai/Kimi-K2.5-TEE", "messages": [{"role": "user", "content": "test"}], "stream": true}'
-
-# Check captured logs
-ls -la test_logs/$(date +%Y-%m-%d)/
-cat test_logs/$(date +%Y-%m-%d)/*.json
-```
-
-**Captured data** (4 capture points):
-1. **Downstream TX** - Client request to proxy
-2. **Upstream TX** - Proxy request to LLM API
-3. **Upstream RX** - LLM API response to proxy
-4. **Downstream RX** - Proxy response to client
-
-**Log format**: Structured JSON with:
-- Request metadata (ID, timestamps, duration)
-- Headers (sanitized - auth masked)
-- Body (parsed JSON)
-- SSE chunks (structured JSON in `data` field, raw string in `raw` if invalid)
-
-
+- Do NOT commit unless explicitly asked
+- Run `go vet ./...` and `go fmt ./...` before commits
+- Ensure build passes: `go build ./...`
