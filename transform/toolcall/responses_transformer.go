@@ -769,8 +769,14 @@ func (t *ResponsesTransformer) handleMessageDelta(event types.Event) error {
 		if t.usage == nil {
 			t.usage = &Usage{}
 		}
-		t.usage.InputTokens = event.Usage.InputTokens
-		t.usage.OutputTokens = event.Usage.OutputTokens
+		// Only update tokens if the new values are non-zero
+		// (message_delta may have 0 for some fields, preserve message_start values)
+		if event.Usage.InputTokens > 0 {
+			t.usage.InputTokens = event.Usage.InputTokens
+		}
+		if event.Usage.OutputTokens > 0 {
+			t.usage.OutputTokens = event.Usage.OutputTokens
+		}
 		// Merge cache tokens (may be in message_delta or message_start)
 		if event.Usage.CacheReadInputTokens > 0 {
 			t.usage.CacheReadInputTokens = event.Usage.CacheReadInputTokens

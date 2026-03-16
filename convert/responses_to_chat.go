@@ -362,7 +362,7 @@ func (c *ResponsesToChatConverter) extractTextFromParts(parts []interface{}) str
 		}
 		partType, _ := partMap["type"].(string)
 		switch partType {
-		case "input_text", "text":
+		case "input_text", "text", "output_text":
 			if text, ok := partMap["text"].(string); ok {
 				if result.Len() > 0 {
 					result.WriteString("\n")
@@ -381,7 +381,7 @@ func (c *ResponsesToChatConverter) hasNonTextParts(parts []interface{}) bool {
 			continue
 		}
 		partType, _ := partMap["type"].(string)
-		if partType != "input_text" && partType != "text" {
+		if partType != "input_text" && partType != "text" && partType != "output_text" {
 			return true
 		}
 	}
@@ -406,8 +406,8 @@ func (c *ResponsesToChatConverter) convertContentParts(parts []interface{}) []in
 
 		partType, _ := partMap["type"].(string)
 		switch partType {
-		case "input_text":
-			// Convert input_text to text
+		case "input_text", "output_text":
+			// Convert input_text and output_text to text
 			if text, ok := partMap["text"].(string); ok {
 				result = append(result, map[string]interface{}{
 					"type": "text",

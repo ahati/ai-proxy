@@ -217,10 +217,19 @@ func (t *AnthropicToChatTransformer) handleContentBlockStop(_ *types.Event) erro
 func (t *AnthropicToChatTransformer) handleMessageDelta(event *types.Event) error {
 	// Capture usage including cache tokens
 	if event.Usage != nil {
-		t.usage = &types.Usage{
-			PromptTokens:     event.Usage.InputTokens,
-			CompletionTokens: event.Usage.OutputTokens,
-			TotalTokens:      event.Usage.InputTokens + event.Usage.OutputTokens,
+		// Initialize usage if not already set (should be from message_start)
+		if t.usage == nil {
+			t.usage = &types.Usage{}
+		}
+		// Only update tokens if the new values are non-zero
+		// (message_delta may have 0 for some fields, preserve message_start values)
+		if event.Usage.InputTokens > 0 {
+			t.usage.PromptTokens = event.Usage.InputTokens
+			t.usage.TotalTokens = event.Usage.InputTokens + t.usage.CompletionTokens
+		}
+		if event.Usage.OutputTokens > 0 {
+			t.usage.CompletionTokens = event.Usage.OutputTokens
+			t.usage.TotalTokens = t.usage.PromptTokens + event.Usage.OutputTokens
 		}
 		// Include cache tokens if available
 		if event.Usage.CacheReadInputTokens > 0 {

@@ -189,10 +189,11 @@ func extractContentFromInput(content interface{}) string {
 		var result strings.Builder
 		for _, part := range arr {
 			if partMap, ok := part.(map[string]interface{}); ok {
-				// Extract text from input_text or input_image parts
+				// Extract text from various content part types
 				partType, _ := partMap["type"].(string)
 				switch partType {
-				case "input_text":
+				case "input_text", "output_text":
+					// Both input_text and output_text contain text content
 					if text, ok := partMap["text"].(string); ok {
 						if result.Len() > 0 {
 							result.WriteString("\n")
