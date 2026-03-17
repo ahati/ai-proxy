@@ -1,6 +1,6 @@
 # AI Proxy
 
-A Go-based HTTP proxy for LLM APIs with OpenAI and Anthropic compatibility. Provides format transformation, tool call normalization, and seamless integration between different API formats.
+A Go-based HTTP proxy that enables Codex with Alibaba and reliable Kimi. Provides format transformation, tool call normalization, and seamless integration between OpenAI, Anthropic, and other API formats.
 
 ## Features
 
