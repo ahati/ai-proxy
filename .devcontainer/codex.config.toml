@@ -1,7 +1,7 @@
 # ==========================================
 # GLOBAL SETTINGS & DEFAULTS
 # ==========================================
-model = "MiniMax-M2.7"
+model = "glm-5"
 model_provider = "proxy_ai"
 model_catalog_json = "/home/vscode/custom_models.json"
 disabled_providers = ["opencode"]
@@ -9,6 +9,9 @@ model_reasoning_effort = "high"
 model_reasoning_summary="detailed"
 hide_agent_reasoning = false
 show_raw_agent_reasoning = true
+approvals_reviewer = "guardian_subagent"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
 # ==========================================
 # PROVIDER DEFINITIONS
 # ==========================================
@@ -150,3 +153,4 @@ status_line = ["model-with-reasoning", "current-dir", "project-root", "git-branc
 
 [features]
 unified_exec = true
+guardian_approval = true
