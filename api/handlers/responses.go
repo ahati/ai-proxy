@@ -9,7 +9,6 @@ import (
 
 	"ai-proxy/config"
 	"ai-proxy/convert"
-	"ai-proxy/logging"
 	"ai-proxy/router"
 	"ai-proxy/transform"
 	"ai-proxy/transform/toolcall"
@@ -80,8 +79,8 @@ func (h *ResponsesHandler) ValidateRequest(body []byte) error {
 		return fmt.Errorf("model is required")
 	}
 
-	// Resolve the model to a route
-	route, err := h.router.Resolve(req.Model)
+	// Resolve the model to a route with protocol context
+	route, err := h.router.ResolveWithProtocol(req.Model, "responses")
 	if err != nil {
 		return fmt.Errorf("failed to resolve model '%s': %w", req.Model, err)
 	}
@@ -119,16 +118,22 @@ func (h *ResponsesHandler) TransformRequest(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to marshal updated request: %w", err)
 	}
 
-	switch h.route.Provider.Type {
+	// Passthrough optimization - no transformation needed
+	if h.route.IsPassthrough {
+		return updatedBody, nil
+	}
+
+	switch h.route.OutputProtocol {
 	case "openai":
 		// Convert ResponsesRequest to ChatCompletionRequest
 		converter := convert.NewResponsesToChatConverter()
+		converter.SetReasoningSplit(h.route.ReasoningSplit)
 		return converter.Convert(updatedBody)
 	case "anthropic":
 		// Convert ResponsesRequest to Anthropic MessageRequest
 		return convert.TransformResponsesToAnthropic(updatedBody)
 	default:
-		// Unknown provider type - pass through as-is
+		// Unknown protocol - pass through as-is
 		return updatedBody, nil
 	}
 }
@@ -140,19 +145,7 @@ func (h *ResponsesHandler) UpstreamURL() string {
 	if h.route == nil {
 		return ""
 	}
-	endpointMap := map[string]string{
-		"responses": "/v1/responses",
-		"anthropic": "/v1/messages",
-		"openai":    "/v1/chat/completions",
-	}
-
-	endpoint, ok := endpointMap[h.route.Provider.Type]
-	if !ok {
-		// handle unknown provider
-		endpoint = "" // or return an error
-		logging.ErrorMsg("invalid provider")
-	}
-	return h.route.Provider.GetUpstreamURL(endpoint)
+	return h.route.Provider.GetEndpoint(h.route.OutputProtocol)
 }
 
 // ResolveAPIKey returns the API key for the resolved provider.
@@ -177,7 +170,7 @@ func (h *ResponsesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
 		return
 	}
 
-	switch h.route.Provider.Type {
+	switch h.route.OutputProtocol {
 	case "openai":
 		// Forward custom headers and Extra header
 		forwardCustomHeaders(c, req, "X-")
@@ -206,7 +199,12 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 		return transform.NewPassthroughTransformer(w)
 	}
 
-	switch h.route.Provider.Type {
+	// Passthrough: no transformation needed
+	if h.route.IsPassthrough && !h.route.ToolCallTransform {
+		return transform.NewPassthroughTransformer(w)
+	}
+
+	switch h.route.OutputProtocol {
 	case "openai":
 		// ChatToResponsesTransformer converts Chat Completions to Responses format
 		// Tool call extraction from markup is enabled when tool_call_transform is true
@@ -233,119 +231,6 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 // @param status - HTTP status code for the error.
 // @param msg - Human-readable error message.
 func (h *ResponsesHandler) WriteError(c *gin.Context, status int, msg string) {
-	sendOpenAIResponsesError(c, status, msg)
-}
-
-// ResponsesHandlerNoRouter handles OpenAI Responses API requests without using a router.
-// It is used for simple configurations where model routing is not needed.
-//
-// @note This handler uses the first OpenAI or Anthropic provider from the configuration.
-type ResponsesHandlerNoRouter struct {
-	cfg        *config.Config
-	inputItems []types.InputItem
-}
-
-// NewResponsesHandlerNoRouter creates a Gin handler for the /v1/responses endpoint
-// without using a router. It uses the first configured provider.
-//
-// @param cfg - Application configuration. Must not be nil.
-// @return Gin handler function that processes responses requests.
-//
-// @deprecated Use NewResponsesHandler with a router for proper model routing.
-func NewResponsesHandlerNoRouter(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		h := &ResponsesHandlerNoRouter{cfg: cfg}
-		Handle(h)(c)
-	}
-}
-
-// ValidateRequest validates the Responses API request.
-func (h *ResponsesHandlerNoRouter) ValidateRequest(body []byte) error {
-	var req types.ResponsesRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
-	}
-	if req.Model == "" {
-		return fmt.Errorf("model is required")
-	}
-	// Parse and store input items for conversation storage
-	h.inputItems = parseInputItems(req.Input)
-	return nil
-}
-
-// TransformRequest converts the request based on available providers.
-func (h *ResponsesHandlerNoRouter) TransformRequest(body []byte) ([]byte, error) {
-	// Check for Anthropic provider first (for backwards compatibility)
-	if h.cfg.GetAnthropicUpstreamURL() != "" {
-		return convert.TransformResponsesToAnthropic(body)
-	}
-	// Fall back to OpenAI provider
-	if h.cfg.GetOpenAIUpstreamURL() != "" {
-		converter := convert.NewResponsesToChatConverter()
-		return converter.Convert(body)
-	}
-	return body, nil
-}
-
-// UpstreamURL returns the upstream URL based on available providers.
-func (h *ResponsesHandlerNoRouter) UpstreamURL() string {
-	// Check for Anthropic provider first
-	anthropicURL := h.cfg.GetAnthropicUpstreamURL()
-	if anthropicURL != "" {
-		return anthropicURL
-	}
-	// Fall back to OpenAI provider
-	openaiURL := h.cfg.GetOpenAIUpstreamURL()
-	if openaiURL != "" {
-		// Append chat completions path if needed
-		if !strings.HasSuffix(openaiURL, "/chat/completions") {
-			return strings.TrimSuffix(openaiURL, "/") + "/chat/completions"
-		}
-		return openaiURL
-	}
-	return ""
-}
-
-// ResolveAPIKey returns the API key for the appropriate provider.
-func (h *ResponsesHandlerNoRouter) ResolveAPIKey(c *gin.Context) string {
-	// Check for Anthropic provider first
-	if h.cfg.GetAnthropicUpstreamURL() != "" {
-		return h.cfg.GetAnthropicAPIKey()
-	}
-	// Fall back to OpenAI provider
-	return h.cfg.GetOpenAIUpstreamAPIKey()
-}
-
-// ForwardHeaders copies headers based on the provider type.
-func (h *ResponsesHandlerNoRouter) ForwardHeaders(c *gin.Context, req *http.Request) {
-	// Check for Anthropic provider first
-	if h.cfg.GetAnthropicUpstreamURL() != "" {
-		for k, v := range c.Request.Header {
-			if strings.HasPrefix(k, "X-") || k == "Anthropic-Version" || k == "Anthropic-Beta" {
-				req.Header[k] = v
-			}
-		}
-		return
-	}
-	// Fall back to OpenAI provider headers
-	forwardCustomHeaders(c, req, "X-")
-	req.Header.Set("Extra", c.Request.Header.Get("Extra"))
-}
-
-// CreateTransformer builds an SSE transformer based on the provider type.
-func (h *ResponsesHandlerNoRouter) CreateTransformer(w io.Writer) transform.SSETransformer {
-	if h.cfg.GetAnthropicUpstreamURL() != "" {
-		t := toolcall.NewResponsesTransformer(w)
-		t.SetInputItems(h.inputItems)
-		return t
-	}
-	t := convert.NewChatToResponsesTransformer(w)
-	t.SetInputItems(h.inputItems)
-	return t
-}
-
-// WriteError sends an error response in OpenAI Responses API format.
-func (h *ResponsesHandlerNoRouter) WriteError(c *gin.Context, status int, msg string) {
 	sendOpenAIResponsesError(c, status, msg)
 }
 
@@ -409,9 +294,4 @@ func (h *ResponsesHandler) ModelInfo() (downstreamModel string, upstreamModel st
 		upstreamModel = h.route.Model
 	}
 	return
-}
-
-// ModelInfo returns empty strings for ResponsesHandlerNoRouter.
-func (h *ResponsesHandlerNoRouter) ModelInfo() (downstreamModel string, upstreamModel string) {
-	return "", ""
 }

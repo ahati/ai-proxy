@@ -516,6 +516,17 @@ func (t *ChatToAnthropicTransformer) handleChunk(chunk types.Chunk) error {
 		return t.handleToolCalls(delta.ToolCalls)
 	}
 
+	// Handle reasoning_details field (MiniMax with reasoning_split enabled)
+	if len(delta.ReasoningDetails) > 0 {
+		for _, rd := range delta.ReasoningDetails {
+			if rd.Text != "" {
+				if err := t.emitThinkingDelta(rd.Text); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// Handle reasoning content (if present)
 	reasoning := delta.Reasoning
 	if reasoning == "" {

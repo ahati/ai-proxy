@@ -13,6 +13,9 @@ import (
 type Router interface {
 	// Resolve resolves a model name to a route with provider information.
 	Resolve(modelName string) (*ResolvedRoute, error)
+	// ResolveWithProtocol resolves a model name with incoming protocol context.
+	// Used for "auto" type routing to enable passthrough optimization.
+	ResolveWithProtocol(modelName, incomingProtocol string) (*ResolvedRoute, error)
 	// GetProvider retrieves a provider by name.
 	GetProvider(name string) (config.Provider, bool)
 	// ListModels returns all configured model names.
@@ -25,10 +28,15 @@ type ResolvedRoute struct {
 	Provider config.Provider
 	// Model is the actual model identifier on the upstream provider.
 	Model string
-	// OutputProtocol specifies the protocol to use: "openai" or "anthropic".
+	// OutputProtocol specifies the protocol to use: "openai", "anthropic", or "auto".
 	OutputProtocol string
 	// ToolCallTransform enables tool call transformation for this route.
 	ToolCallTransform bool
+	// ReasoningSplit enables separate reasoning output for this route.
+	ReasoningSplit bool
+	// IsPassthrough indicates when no protocol transformation is needed.
+	// True when incoming protocol matches output protocol (passthrough mode).
+	IsPassthrough bool
 }
 
 // router implements the Router interface.
@@ -61,6 +69,10 @@ func NewRouter(s *config.Schema) (Router, error) {
 // It first checks for an exact model match in the schema.
 // If not found and fallback is enabled, it uses the fallback configuration.
 // Returns an error if the model is unknown and no fallback is available.
+//
+// @pre modelName must not be empty
+// @post returned OutputProtocol is determined by modelConfig.Type, fallback.Type, or provider's default
+// @post IsPassthrough is false when returned (use ResolveWithProtocol for passthrough detection)
 func (r *router) Resolve(modelName string) (*ResolvedRoute, error) {
 	// Check for exact model match
 	if modelConfig, ok := r.schema.Models[modelName]; ok {
@@ -68,11 +80,20 @@ func (r *router) Resolve(modelName string) (*ResolvedRoute, error) {
 		if !ok {
 			return nil, fmt.Errorf("provider '%s' not found for model '%s'", modelConfig.Provider, modelName)
 		}
+
+		// Determine output protocol
+		outputProtocol := provider.GetDefaultProtocol() // default to provider's default
+		if modelConfig.Type != "" {
+			outputProtocol = modelConfig.Type
+		}
+
 		return &ResolvedRoute{
 			Provider:          provider,
 			Model:             modelConfig.Model,
-			OutputProtocol:    provider.Type,
+			OutputProtocol:    outputProtocol,
 			ToolCallTransform: modelConfig.ToolCallTransform,
+			ReasoningSplit:    modelConfig.ReasoningSplit,
+			IsPassthrough:     false,
 		}, nil
 	}
 
@@ -87,16 +108,58 @@ func (r *router) Resolve(modelName string) (*ResolvedRoute, error) {
 		model := r.schema.Fallback.Model
 		model = strings.ReplaceAll(model, "{model}", modelName)
 
+		// Determine output protocol for fallback
+		outputProtocol := provider.GetDefaultProtocol() // default to provider's default
+		if r.schema.Fallback.Type != "" {
+			outputProtocol = r.schema.Fallback.Type
+		}
+
 		return &ResolvedRoute{
 			Provider:          provider,
 			Model:             model,
-			OutputProtocol:    provider.Type,
+			OutputProtocol:    outputProtocol,
 			ToolCallTransform: r.schema.Fallback.ToolCallTransform,
+			ReasoningSplit:    r.schema.Fallback.ReasoningSplit,
+			IsPassthrough:     false,
 		}, nil
 	}
 
 	// No match and no fallback
 	return nil, fmt.Errorf("unknown model: '%s'", modelName)
+}
+
+// ResolveWithProtocol resolves a model name with incoming protocol context.
+// This is used for "auto" type routing to enable passthrough optimization.
+// When the model is configured with type "auto", it checks if the provider
+// supports the incoming protocol and sets IsPassthrough accordingly.
+//
+// @pre modelName must not be empty
+// @pre incomingProtocol should be "openai", "anthropic", or "responses"
+// @post If OutputProtocol is "auto", it will be resolved to a concrete protocol
+// @post IsPassthrough will be true when incoming protocol matches output protocol
+func (r *router) ResolveWithProtocol(modelName, incomingProtocol string) (*ResolvedRoute, error) {
+	// First get base route
+	route, err := r.Resolve(modelName)
+	if err != nil {
+		return nil, err
+	}
+
+	// If not auto type, return as-is
+	if route.OutputProtocol != "auto" {
+		return route, nil
+	}
+
+	// Handle auto type - check if provider supports incoming protocol
+	if route.Provider.HasProtocol(incomingProtocol) {
+		route.OutputProtocol = incomingProtocol
+		route.IsPassthrough = true
+	} else {
+		// Use provider's default protocol
+		route.OutputProtocol = route.Provider.GetDefaultProtocol()
+		route.IsPassthrough = false
+	}
+
+	return route, nil
 }
 
 // GetProvider retrieves a provider by name.

@@ -9,6 +9,7 @@ import (
 
 	"ai-proxy/config"
 	"ai-proxy/proxy"
+	"ai-proxy/router"
 	"ai-proxy/tokens"
 	"ai-proxy/types"
 
@@ -25,9 +26,10 @@ import (
 //
 // @note This is a non-streaming endpoint that returns a single JSON response.
 type CountTokensHandler struct {
-	// cfg contains the application configuration including upstream URL and API key.
-	// Must not be nil after construction.
-	cfg *config.Config
+	cfg           *config.Config
+	modelRouter   router.Router
+	route         *router.ResolvedRoute
+	originalModel string
 }
 
 // NonStreamingHandler defines the interface for non-streaming API requests.
@@ -59,8 +61,14 @@ type NonStreamingHandler interface {
 //
 // @pre cfg != nil
 // @pre cfg.AnthropicUpstreamURL != ""
-func NewCountTokensHandler(cfg *config.Config) gin.HandlerFunc {
-	return HandleNonStreaming(&CountTokensHandler{cfg: cfg})
+func NewCountTokensHandler(cfg *config.Config, r router.Router) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		h := &CountTokensHandler{
+			cfg:         cfg,
+			modelRouter: r,
+		}
+		HandleNonStreaming(h)(c)
+	}
 }
 
 // ValidateRequest validates the count_tokens request format.
@@ -74,23 +82,28 @@ func (h *CountTokensHandler) ValidateRequest(body []byte) error {
 		return err
 	}
 
-	// Model is required for accurate token counting
 	if req.Model == "" {
 		return fmt.Errorf("model is required")
 	}
 
-	// Messages array is required
 	if len(req.Messages) == 0 {
 		return fmt.Errorf("messages array is required and cannot be empty")
 	}
 
-	// Validate each message has required fields
 	for i, msg := range req.Messages {
 		if msg.Role == "" {
 			return fmt.Errorf("message[%d]: role is required", i)
 		}
 		if msg.Content == nil {
 			return fmt.Errorf("message[%d]: content is required", i)
+		}
+	}
+
+	if h.modelRouter != nil {
+		route, err := h.modelRouter.ResolveWithProtocol(req.Model, "anthropic")
+		if err == nil {
+			h.route = route
+			h.originalModel = req.Model
 		}
 	}
 
@@ -128,9 +141,11 @@ func (h *CountTokensHandler) TransformRequest(body []byte) ([]byte, error) {
 // @pre h.cfg != nil
 // @post URL includes the full path to count_tokens endpoint.
 func (h *CountTokensHandler) UpstreamURL() string {
-	// Replace /messages with /messages/count_tokens in the base URL
-	baseURL := h.cfg.GetAnthropicUpstreamURL()
-	return strings.Replace(baseURL, "/messages", "/messages/count_tokens", 1)
+	if h.route != nil {
+		baseURL := h.route.Provider.GetEndpoint("anthropic")
+		return strings.Replace(baseURL, "/messages", "/messages/count_tokens", 1)
+	}
+	return ""
 }
 
 // ResolveAPIKey returns the configured Anthropic API key.
@@ -141,7 +156,10 @@ func (h *CountTokensHandler) UpstreamURL() string {
 //
 // @pre h.cfg != nil
 func (h *CountTokensHandler) ResolveAPIKey(c *gin.Context) string {
-	return h.cfg.GetAnthropicAPIKey()
+	if h.route != nil {
+		return h.route.Provider.GetAPIKey()
+	}
+	return ""
 }
 
 // ForwardHeaders copies X-*, Anthropic-Version, and Anthropic-Beta headers
@@ -249,7 +267,7 @@ func proxyNonStreamingRequest(c *gin.Context, h NonStreamingHandler, body []byte
 	// Execute the upstream request
 	resp, err := client.Do(req)
 	if err != nil {
-		h.WriteError(c, http.StatusBadGateway, "Upstream request failed")
+		handleLocalTokenCount(c, body, h)
 		return
 	}
 	defer resp.Body.Close()

@@ -340,6 +340,18 @@ func (t *ChatToResponsesTransformer) handleChunk(chunk *types.Chunk) error {
 	choice := chunk.Choices[0]
 	delta := choice.Delta
 
+	// Handle reasoning_details field (MiniMax with reasoning_split enabled)
+	// This must come BEFORE content handling
+	if len(delta.ReasoningDetails) > 0 {
+		for _, rd := range delta.ReasoningDetails {
+			if rd.Text != "" {
+				if err := t.emitReasoningDelta(rd.Text); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// Process content BEFORE role check - chunks may have both role AND content
 	if delta.Content != "" {
 		return t.emitTextDelta(delta.Content)
@@ -1063,4 +1075,30 @@ func (t *ChatToResponsesTransformer) Close() error {
 	}
 
 	return t.Flush()
+}
+
+// EmitError sends a response.failed event for stream errors.
+// This notifies clients when the stream terminates unexpectedly.
+func (t *ChatToResponsesTransformer) EmitError(streamErr error) error {
+	if t.completed || t.responseID == "" {
+		return nil
+	}
+
+	event := map[string]interface{}{
+		"type":            "response.failed",
+		"sequence_number": t.nextSeq(),
+		"response": map[string]interface{}{
+			"id":         t.responseID,
+			"object":     "response",
+			"created_at": t.created,
+			"model":      t.model,
+			"status":     "failed",
+			"error": map[string]interface{}{
+				"message": streamErr.Error(),
+				"type":    "stream_error",
+			},
+		},
+	}
+
+	return t.writeEvent(event)
 }

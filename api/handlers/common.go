@@ -13,6 +13,7 @@ import (
 	"ai-proxy/capture"
 	"ai-proxy/logging"
 	"ai-proxy/proxy"
+	"ai-proxy/transform"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tmaxmax/go-sse"
@@ -95,6 +96,23 @@ func (tcw *timingCaptureWriter) parseAndRecordEvents() {
 	// Keep remaining partial data in buffer
 	tcw.buf.Reset()
 	tcw.buf.Write(data)
+}
+
+// FlushRemaining flushes any remaining buffered data as a final chunk.
+// This ensures partial events are captured when the stream ends unexpectedly.
+func (tcw *timingCaptureWriter) FlushRemaining() {
+	data := tcw.buf.Bytes()
+	if len(data) > 0 {
+		// First, try to parse any complete events
+		tcw.parseAndRecordEvents()
+
+		// If there's still data in buffer, it might be a partial event
+		// Record it as raw data so it's not lost
+		remaining := tcw.buf.Bytes()
+		if len(remaining) > 0 {
+			tcw.cw.RecordChunk("", remaining)
+		}
+	}
 }
 
 // parseSSEEvent extracts the event type and data from an SSE event string.
@@ -294,10 +312,15 @@ func streamResponse(c *gin.Context, body io.Reader, h Handler) {
 				} else {
 					logging.ErrorMsg("SSE stream error: %v", err)
 				}
+				emitStreamError(transformer, err)
 				return false
 			}
 			// Transform each event to downstream format
-			transformer.Transform(&ev)
+			if err := transformer.Transform(&ev); err != nil {
+				logging.ErrorMsg("Transform error: %v", err)
+				emitStreamError(transformer, err)
+				return false
+			}
 		}
 		// Return false to signal end of stream
 		return false
@@ -354,7 +377,10 @@ func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.Ca
 		timingWriter := newTimingCaptureWriter(w, downstream)
 		// Create transformer that writes to our timing-aware writer
 		transformer := h.CreateTransformer(timingWriter)
-		defer transformer.Close()
+		defer func() {
+			timingWriter.FlushRemaining()
+			transformer.Close()
+		}()
 
 		// Iterate over all SSE events from upstream
 		for ev, err := range sse.Read(body, nil) {
@@ -365,6 +391,7 @@ func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.Ca
 				} else {
 					logging.ErrorMsg("SSE stream error (capture): %v", err)
 				}
+				emitStreamError(transformer, err)
 				return false
 			}
 			// Capture upstream events before transformation
@@ -373,7 +400,11 @@ func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.Ca
 				recordUpstreamEvent(upstream, ev)
 			}
 			// Transform and send event to client (timing captured by timingWriter)
-			transformer.Transform(&ev)
+			if err := transformer.Transform(&ev); err != nil {
+				logging.ErrorMsg("Transform error (capture): %v", err)
+				emitStreamError(transformer, err)
+				return false
+			}
 
 			// Flush after each event to ensure immediate delivery
 			// This prevents buffering that causes clients to timeout
@@ -434,10 +465,15 @@ func streamWithoutCapture(c *gin.Context, body io.Reader, h Handler) {
 				} else {
 					logging.ErrorMsg("SSE stream error (no-capture): %v", err)
 				}
+				emitStreamError(transformer, err)
 				return false
 			}
 			// Transform and send event directly to client
-			transformer.Transform(&ev)
+			if err := transformer.Transform(&ev); err != nil {
+				logging.ErrorMsg("Transform error (no-capture): %v", err)
+				emitStreamError(transformer, err)
+				return false
+			}
 
 			// Flush after each event to ensure immediate delivery
 			if canFlush {
@@ -460,6 +496,17 @@ func recordUpstreamEvent(w capture.CaptureWriter, ev sse.Event) {
 	// Only record events with data - skip empty keepalive events
 	if ev.Data != "" {
 		w.RecordChunk(ev.Type, []byte(ev.Data))
+	}
+}
+
+// emitStreamError sends a response.failed event to the client before closing.
+// This ensures clients receive proper notification of stream failures.
+func emitStreamError(transformer transform.SSETransformer, err error) {
+	// Type assert to check if transformer supports error emission
+	if et, ok := transformer.(interface{ EmitError(error) error }); ok {
+		if emitErr := et.EmitError(err); emitErr != nil {
+			logging.ErrorMsg("Failed to emit error event: %v", emitErr)
+		}
 	}
 }
 

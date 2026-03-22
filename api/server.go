@@ -105,7 +105,7 @@ func (s *Server) setupRoutes() {
 
 	// Messages count tokens endpoint - Anthropic API format endpoint
 	// for counting tokens in messages before sending to upstream.
-	s.router.POST("/v1/messages/count_tokens", handlers.NewCountTokensHandler(s.config))
+	s.router.POST("/v1/messages/count_tokens", handlers.NewCountTokensHandler(s.config, s.modelRouter))
 
 	// Responses endpoint - unified OpenAI Responses API endpoint that routes to the
 	// appropriate provider based on model configuration.

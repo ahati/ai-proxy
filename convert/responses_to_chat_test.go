@@ -2661,3 +2661,71 @@ func TestResponsesToChatConverter_Convert_CodexInputOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestResponsesToChatConverter_SetReasoningSplit(t *testing.T) {
+	t.Run("reasoning_split disabled by default", func(t *testing.T) {
+		converter := NewResponsesToChatConverter()
+		input := `{"model": "MiniMax-M2.7", "input": "hello"}`
+		output, err := converter.Convert([]byte(input))
+		if err != nil {
+			t.Fatalf("Convert error: %v", err)
+		}
+		var req types.ChatCompletionRequest
+		if err := json.Unmarshal(output, &req); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if req.ReasoningSplit {
+			t.Error("ReasoningSplit should be false by default")
+		}
+	})
+
+	t.Run("reasoning_split enabled", func(t *testing.T) {
+		converter := NewResponsesToChatConverter()
+		converter.SetReasoningSplit(true)
+		input := `{"model": "MiniMax-M2.7", "input": "hello"}`
+		output, err := converter.Convert([]byte(input))
+		if err != nil {
+			t.Fatalf("Convert error: %v", err)
+		}
+		var req types.ChatCompletionRequest
+		if err := json.Unmarshal(output, &req); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if !req.ReasoningSplit {
+			t.Error("ReasoningSplit should be true")
+		}
+	})
+
+	t.Run("reasoning_split in output json", func(t *testing.T) {
+		converter := NewResponsesToChatConverter()
+		converter.SetReasoningSplit(true)
+		input := `{"model": "MiniMax-M2.7", "input": "test"}`
+		output, err := converter.Convert([]byte(input))
+		if err != nil {
+			t.Fatalf("Convert error: %v", err)
+		}
+		if !bytes.Contains(output, []byte(`"reasoning_split":true`)) {
+			t.Errorf("Output should contain reasoning_split:true, got %s", output)
+		}
+	})
+
+	t.Run("reasoning_split with reasoning effort", func(t *testing.T) {
+		converter := NewResponsesToChatConverter()
+		converter.SetReasoningSplit(true)
+		input := `{"model": "MiniMax-M2.7", "input": "test", "reasoning": {"effort": "high"}}`
+		output, err := converter.Convert([]byte(input))
+		if err != nil {
+			t.Fatalf("Convert error: %v", err)
+		}
+		var req types.ChatCompletionRequest
+		if err := json.Unmarshal(output, &req); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if !req.ReasoningSplit {
+			t.Error("ReasoningSplit should be true")
+		}
+		if req.ReasoningEffort != "high" {
+			t.Errorf("ReasoningEffort should be 'high', got '%s'", req.ReasoningEffort)
+		}
+	})
+}

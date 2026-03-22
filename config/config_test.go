@@ -261,8 +261,7 @@ func TestLoad_ConfigFile(t *testing.T) {
 		"providers": [
 			{
 				"name": "test-provider",
-				"type": "openai",
-				"base_url": "https://api.example.com/v1",
+				"endpoints": {"openai": "https://api.example.com/v1"},
 				"apiKey": "test-key"
 			}
 		],
@@ -317,8 +316,7 @@ func TestLoad_ConfigFileFromEnv(t *testing.T) {
 		"providers": [
 			{
 				"name": "env-provider",
-				"type": "anthropic",
-				"base_url": "https://api.anthropic.com",
+				"endpoints": {"anthropic": "https://api.anthropic.com"},
 				"apiKey": "test-api-key"
 			}
 		],
@@ -377,7 +375,7 @@ func TestGetSchema(t *testing.T) {
 
 	// Test with valid AppConfig
 	schema := &Schema{
-		Providers: []Provider{{Name: "test", Type: "openai", BaseURL: "https://example.com"}},
+		Providers: []Provider{{Name: "test", Endpoints: map[string]string{"openai": "https://example.com"}}},
 	}
 	cfg = &Config{AppConfig: schema}
 	if cfg.GetSchema() != schema {
@@ -399,8 +397,7 @@ func TestLoad_PortAndSSELogDirWithConfigFile(t *testing.T) {
 		"providers": [
 			{
 				"name": "test-provider",
-				"type": "openai",
-				"base_url": "https://api.example.com",
+				"endpoints": {"openai": "https://api.example.com"},
 				"apiKey": "test-key"
 			}
 		],

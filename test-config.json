@@ -2,32 +2,29 @@
   "providers": [
     {
       "name": "chutes",
-      "type": "openai",
-      "base_url": "https://llm.chutes.ai/v1/chat/completions",
+      "endpoints": {
+        "openai": "https://llm.chutes.ai/v1/chat/completions",
+        "anthropic": "https://claude.chutes.ai/v1/messages"
+      },
+      "default": "openai",
       "envApiKey": "CHUTES_API_KEY"
     },
     {
-      "name": "minimax_openai",
-      "type": "openai",
-      "base_url": "https://api.minimax.io/v1/chat/completions",
+      "name": "minimax",
+      "endpoints": {
+        "openai": "https://api.minimax.io/v1/chat/completions",
+        "anthropic": "https://api.minimax.io/anthropic/v1/messages"
+      },
+      "default": "openai",
       "envApiKey": "MINIMAX_IO_API_KEY"
     },
     {
-      "name": "minimax_anthropic",
-      "type": "anthropic",
-      "base_url": "https://api.minimax.io/anthropic/v1/messages",
-      "envApiKey": "MINIMAX_IO_API_KEY"
-    },
-    {
-      "name": "alibaba_anthropic",
-      "type": "anthropic",
-      "base_url": "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages",
-      "envApiKey": "ALIBABA_API_KEY"
-    },
-    {
-      "name": "alibaba_openai",
-      "type": "openai",
-      "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions",
+      "name": "alibaba",
+      "endpoints": {
+        "openai": "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions",
+        "anthropic": "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages"
+      },
+      "default": "openai",
       "envApiKey": "ALIBABA_API_KEY"
     }
   ],
@@ -35,53 +32,64 @@
     "moonshotai/Kimi-K2.5-TEE": {
       "provider": "chutes",
       "model": "moonshotai/Kimi-K2.5-TEE",
+      "type": "auto",
       "tool_call_transform": true
     },
     "zai-org/GLM-5-TEE": {
       "provider": "chutes",
       "model": "zai-org/GLM-5-TEE",
+      "type": "auto",
       "tool_call_transform": false
     },
     "kimi-k2.5": {
-      "provider": "alibaba_anthropic",
+      "provider": "alibaba",
       "model": "kimi-k2.5",
+      "type": "anthropic",
       "tool_call_transform": true
     },
     "gpt-5.4": {
-      "provider": "alibaba_anthropic",
+      "provider": "alibaba",
       "model": "glm-5",
       "tool_call_transform": false
     },
     "gpt-5.3-codex": {
-      "provider": "alibaba_anthropic",
+      "provider": "alibaba",
       "model": "glm-5",
       "tool_call_transform": false
     },
     "gpt-5.1-codex-mini": {
-      "provider": "minimax_openai",
+      "provider": "minimax",
       "model": "MiniMax-M2.7",
-      "tool_call_transform": false
+      "type": "auto",
+      "tool_call_transform": false,
+      "reasoning_split": true
     },
     "gpt-5-mini": {
-      "provider": "minimax_openai",
+      "provider": "minimax",
       "model": "MiniMax-M2.7",
-      "tool_call_transform": false
+      "type": "auto",
+      "tool_call_transform": false,
+      "reasoning_split": true
     },
     "MiniMax-M2.7": {
-      "provider": "minimax_anthropic",
+      "provider": "minimax",
       "model": "MiniMax-M2.7",
-      "tool_call_transform": false
+      "type": "auto",
+      "tool_call_transform": false,
+      "reasoning_split": true
     },
     "qwen3-max": {
-      "provider": "alibaba_openai",
+      "provider": "alibaba",
       "model": "qwen3-max-2026-01-23",
+      "type": "auto",
       "tool_call_transform": false
     }
   },
   "fallback": {
     "enabled": true,
-    "provider": "alibaba_openai",
+    "provider": "alibaba",
     "model": "{model}",
+    "type": "auto",
     "tool_call_transform": false
   }
 }

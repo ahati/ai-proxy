@@ -3,11 +3,13 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"ai-proxy/config"
+	"ai-proxy/router"
 	"ai-proxy/types"
 
 	"github.com/gin-gonic/gin"
@@ -176,18 +178,16 @@ func TestCountTokensHandler_UpstreamURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{
-				AppConfig: &config.Schema{
-					Providers: []config.Provider{
-						{
-							Name:    "anthropic",
-							Type:    "anthropic",
-							BaseURL: tt.baseURL,
-						},
-					},
+			provider := config.Provider{
+				Name:      "anthropic",
+				Endpoints: map[string]string{"anthropic": tt.baseURL},
+			}
+			h := &CountTokensHandler{
+				route: &router.ResolvedRoute{
+					Provider:       provider,
+					OutputProtocol: "anthropic",
 				},
 			}
-			h := &CountTokensHandler{cfg: cfg}
 
 			gotURL := h.UpstreamURL()
 			if gotURL != tt.wantURL {
@@ -198,18 +198,17 @@ func TestCountTokensHandler_UpstreamURL(t *testing.T) {
 }
 
 func TestCountTokensHandler_ResolveAPIKey(t *testing.T) {
-	cfg := &config.Config{
-		AppConfig: &config.Schema{
-			Providers: []config.Provider{
-				{
-					Name:   "anthropic",
-					Type:   "anthropic",
-					APIKey: "test-api-key-123",
-				},
-			},
+	provider := config.Provider{
+		Name:      "anthropic",
+		Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"},
+		APIKey:    "test-api-key-123",
+	}
+	h := &CountTokensHandler{
+		route: &router.ResolvedRoute{
+			Provider:       provider,
+			OutputProtocol: "anthropic",
 		},
 	}
-	h := &CountTokensHandler{cfg: cfg}
 
 	gotKey := h.ResolveAPIKey(nil)
 	if gotKey != "test-api-key-123" {
@@ -324,23 +323,19 @@ func TestCountTokensHandler_WriteError(t *testing.T) {
 }
 
 func TestCountTokensHandler_EndToEnd(t *testing.T) {
-	// This test verifies the handler integration without actual upstream call
-	// In production, this would call the real upstream API
-
 	cfg := &config.Config{
 		AppConfig: &config.Schema{
 			Providers: []config.Provider{
 				{
-					Name:    "anthropic",
-					Type:    "anthropic",
-					BaseURL: "https://api.anthropic.com/v1/messages",
-					APIKey:  "test-key",
+					Name:      "anthropic",
+					Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
+					APIKey:    "test-key",
 				},
 			},
 		},
 	}
 
-	handler := NewCountTokensHandler(cfg)
+	handler := NewCountTokensHandler(cfg, nil)
 
 	// Create test request
 	reqBody := types.MessageCountTokensRequest{
@@ -429,4 +424,132 @@ func (m *mockNonStreamingHandler) ForwardHeaders(c *gin.Context, req *http.Reque
 
 func (m *mockNonStreamingHandler) WriteError(c *gin.Context, status int, msg string) {
 	c.JSON(status, gin.H{"error": msg})
+}
+
+func TestCountTokensHandler_UpstreamURL_WithRouter(t *testing.T) {
+	tests := []struct {
+		name        string
+		provider    config.Provider
+		modelInBody string
+		wantURL     string
+	}{
+		{
+			name: "multi-protocol provider with anthropic endpoint",
+			provider: config.Provider{
+				Name: "alibaba",
+				Endpoints: map[string]string{
+					"openai":    "https://coding-intl.dashscope.aliyuncs.com/v1/chat/completions",
+					"anthropic": "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages",
+				},
+				Default: "openai",
+			},
+			modelInBody: "glm-5",
+			wantURL:     "https://coding-intl.dashscope.aliyuncs.com/apps/anthropic/v1/messages/count_tokens",
+		},
+		{
+			name: "legacy provider with type field",
+			provider: config.Provider{
+				Name:      "anthropic",
+				Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
+			},
+			modelInBody: "claude-3",
+			wantURL:     "https://api.anthropic.com/v1/messages/count_tokens",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := &config.Schema{
+				Providers: []config.Provider{tt.provider},
+				Models: map[string]config.ModelConfig{
+					tt.modelInBody: {
+						Provider: tt.provider.Name,
+						Model:    tt.modelInBody,
+						Type:     "anthropic",
+					},
+				},
+			}
+			cfg := &config.Config{AppConfig: schema}
+			r, _ := router.NewRouter(schema)
+			h := &CountTokensHandler{cfg: cfg, modelRouter: r}
+
+			body := fmt.Sprintf(`{"model": "%s", "messages": [{"role": "user", "content": "hi"}]}`, tt.modelInBody)
+			_ = h.ValidateRequest([]byte(body))
+
+			gotURL := h.UpstreamURL()
+			if gotURL != tt.wantURL {
+				t.Errorf("Expected URL %q, got %q", tt.wantURL, gotURL)
+			}
+		})
+	}
+}
+
+func TestCountTokensHandler_ResolveAPIKey_WithRouter(t *testing.T) {
+	provider := config.Provider{
+		Name:      "alibaba",
+		APIKey:    "router-api-key",
+		Endpoints: map[string]string{"anthropic": "https://example.com/v1/messages"},
+	}
+	schema := &config.Schema{
+		Providers: []config.Provider{provider},
+		Models: map[string]config.ModelConfig{
+			"glm-5": {Provider: "alibaba", Model: "glm-5", Type: "anthropic"},
+		},
+	}
+	cfg := &config.Config{AppConfig: schema}
+	r, _ := router.NewRouter(schema)
+	h := &CountTokensHandler{cfg: cfg, modelRouter: r}
+
+	body := `{"model": "glm-5", "messages": [{"role": "user", "content": "hi"}]}`
+	_ = h.ValidateRequest([]byte(body))
+
+	gotKey := h.ResolveAPIKey(nil)
+	if gotKey != "router-api-key" {
+		t.Errorf("Expected key %q, got %q", "router-api-key", gotKey)
+	}
+}
+
+func TestHandleNonStreaming_FallbackToLocalTokenCount(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{
+				Name:      "test",
+				APIKey:    "test-key",
+				Endpoints: map[string]string{"anthropic": "http://localhost:99999/v1/messages"},
+			},
+		},
+		Models: map[string]config.ModelConfig{
+			"test-model": {Provider: "test", Model: "test-model", Type: "anthropic"},
+		},
+	}
+	cfg := &config.Config{AppConfig: schema}
+	r, _ := router.NewRouter(schema)
+	handler := NewCountTokensHandler(cfg, r)
+
+	reqBody := types.MessageCountTokensRequest{
+		Model:    "test-model",
+		Messages: []types.MessageInput{{Role: "user", Content: "Hello"}},
+	}
+	reqBodyBytes, _ := json.Marshal(reqBody)
+	req := httptest.NewRequest("POST", "/v1/messages/count_tokens", bytes.NewReader(reqBodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = req
+
+	handler(c)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp types.MessageCountTokensResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	if resp.InputTokens == 0 {
+		t.Error("Expected non-zero input_tokens in response")
+	}
 }

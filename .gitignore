@@ -5,3 +5,4 @@ old_sse_logs/*
 ai-proxy
 converter
 plans
+.ruff_cache

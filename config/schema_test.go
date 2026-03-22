@@ -17,10 +17,9 @@ func TestProviderGetAPIKey(t *testing.T) {
 		{
 			name: "direct APIKey takes precedence",
 			provider: Provider{
-				Name:    "test-provider",
-				Type:    "openai",
-				BaseURL: "https://api.example.com/v1",
-				APIKey:  "direct-api-key",
+				Name:      "test-provider",
+				Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
+				APIKey:    "direct-api-key",
 			},
 			wantKey: "direct-api-key",
 		},
@@ -28,8 +27,7 @@ func TestProviderGetAPIKey(t *testing.T) {
 			name: "EnvAPIKey used when APIKey is empty",
 			provider: Provider{
 				Name:      "test-provider",
-				Type:      "anthropic",
-				BaseURL:   "https://api.anthropic.com",
+				Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"},
 				EnvAPIKey: "TEST_API_KEY_ENV",
 			},
 			envKey:   "TEST_API_KEY_ENV",
@@ -39,9 +37,8 @@ func TestProviderGetAPIKey(t *testing.T) {
 		{
 			name: "empty string when neither set",
 			provider: Provider{
-				Name:    "test-provider",
-				Type:    "openai",
-				BaseURL: "https://api.example.com/v1",
+				Name:      "test-provider",
+				Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
 			},
 			wantKey: "",
 		},
@@ -49,8 +46,7 @@ func TestProviderGetAPIKey(t *testing.T) {
 			name: "APIKey takes precedence over EnvAPIKey",
 			provider: Provider{
 				Name:      "test-provider",
-				Type:      "openai",
-				BaseURL:   "https://api.example.com/v1",
+				Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
 				APIKey:    "direct-key",
 				EnvAPIKey: "TEST_API_KEY_OVERRIDE",
 			},
@@ -62,8 +58,7 @@ func TestProviderGetAPIKey(t *testing.T) {
 			name: "EnvAPIKey with empty environment value",
 			provider: Provider{
 				Name:      "test-provider",
-				Type:      "openai",
-				BaseURL:   "https://api.example.com/v1",
+				Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
 				EnvAPIKey: "EMPTY_ENV_VAR",
 			},
 			envKey:   "EMPTY_ENV_VAR",
@@ -74,8 +69,7 @@ func TestProviderGetAPIKey(t *testing.T) {
 			name: "EnvAPIKey referencing non-existent env var",
 			provider: Provider{
 				Name:      "test-provider",
-				Type:      "openai",
-				BaseURL:   "https://api.example.com/v1",
+				Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
 				EnvAPIKey: "NON_EXISTENT_VAR_12345",
 			},
 			wantKey: "",
@@ -102,14 +96,12 @@ func TestSchemaJSONUnmarshal(t *testing.T) {
 		"providers": [
 			{
 				"name": "openai-main",
-				"type": "openai",
-				"base_url": "https://api.openai.com/v1",
+				"endpoints": {"openai": "https://api.openai.com/v1"},
 				"apiKey": "sk-test-key-123"
 			},
 			{
 				"name": "anthropic-main",
-				"type": "anthropic",
-				"base_url": "https://api.anthropic.com",
+				"endpoints": {"anthropic": "https://api.anthropic.com"},
 				"envApiKey": "ANTHROPIC_API_KEY"
 			}
 		],
@@ -147,11 +139,8 @@ func TestSchemaJSONUnmarshal(t *testing.T) {
 	if openaiProvider.Name != "openai-main" {
 		t.Errorf("Expected provider name 'openai-main', got %q", openaiProvider.Name)
 	}
-	if openaiProvider.Type != "openai" {
-		t.Errorf("Expected provider type 'openai', got %q", openaiProvider.Type)
-	}
-	if openaiProvider.BaseURL != "https://api.openai.com/v1" {
-		t.Errorf("Expected base URL 'https://api.openai.com/v1', got %q", openaiProvider.BaseURL)
+	if openaiProvider.GetEndpoint("openai") != "https://api.openai.com/v1" {
+		t.Errorf("Expected openai endpoint 'https://api.openai.com/v1', got %q", openaiProvider.GetEndpoint("openai"))
 	}
 	if openaiProvider.APIKey != "sk-test-key-123" {
 		t.Errorf("Expected API key 'sk-test-key-123', got %q", openaiProvider.APIKey)
@@ -237,8 +226,7 @@ func TestSchemaJSONUnmarshalPartial(t *testing.T) {
 		"providers": [
 			{
 				"name": "minimal-provider",
-				"type": "openai",
-				"base_url": "https://api.example.com"
+				"endpoints": {"openai": "https://api.example.com"}
 			}
 		],
 		"models": {
@@ -282,10 +270,9 @@ func TestSchemaJSONMarshal(t *testing.T) {
 	schema := Schema{
 		Providers: []Provider{
 			{
-				Name:    "test-provider",
-				Type:    "openai",
-				BaseURL: "https://api.test.com/v1",
-				APIKey:  "test-key",
+				Name:      "test-provider",
+				Endpoints: map[string]string{"openai": "https://api.test.com/v1"},
+				APIKey:    "test-key",
 			},
 		},
 		Models: map[string]ModelConfig{
@@ -335,15 +322,13 @@ func TestProviderJSONUnmarshal(t *testing.T) {
 			name: "full provider with all fields",
 			jsonData: `{
 				"name": "full-provider",
-				"type": "openai",
-				"base_url": "https://api.example.com/v1",
+				"endpoints": {"openai": "https://api.example.com/v1"},
 				"apiKey": "secret-key",
 				"envApiKey": "API_KEY_ENV"
 			}`,
 			want: Provider{
 				Name:      "full-provider",
-				Type:      "openai",
-				BaseURL:   "https://api.example.com/v1",
+				Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
 				APIKey:    "secret-key",
 				EnvAPIKey: "API_KEY_ENV",
 			},
@@ -352,27 +337,23 @@ func TestProviderJSONUnmarshal(t *testing.T) {
 			name: "minimal provider",
 			jsonData: `{
 				"name": "minimal",
-				"type": "anthropic",
-				"base_url": "https://api.anthropic.com"
+				"endpoints": {"anthropic": "https://api.anthropic.com"}
 			}`,
 			want: Provider{
-				Name:    "minimal",
-				Type:    "anthropic",
-				BaseURL: "https://api.anthropic.com",
+				Name:      "minimal",
+				Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"},
 			},
 		},
 		{
 			name: "provider with only env key",
 			jsonData: `{
 				"name": "env-only",
-				"type": "openai",
-				"base_url": "https://api.example.com",
+				"endpoints": {"openai": "https://api.example.com"},
 				"envApiKey": "MY_API_KEY"
 			}`,
 			want: Provider{
 				Name:      "env-only",
-				Type:      "openai",
-				BaseURL:   "https://api.example.com",
+				Endpoints: map[string]string{"openai": "https://api.example.com"},
 				EnvAPIKey: "MY_API_KEY",
 			},
 		},
@@ -388,11 +369,11 @@ func TestProviderJSONUnmarshal(t *testing.T) {
 			if got.Name != tt.want.Name {
 				t.Errorf("Name = %q, want %q", got.Name, tt.want.Name)
 			}
-			if got.Type != tt.want.Type {
-				t.Errorf("Type = %q, want %q", got.Type, tt.want.Type)
+			if got.GetEndpoint("openai") != tt.want.GetEndpoint("openai") {
+				t.Errorf("OpenAI Endpoint = %q, want %q", got.GetEndpoint("openai"), tt.want.GetEndpoint("openai"))
 			}
-			if got.BaseURL != tt.want.BaseURL {
-				t.Errorf("BaseURL = %q, want %q", got.BaseURL, tt.want.BaseURL)
+			if got.GetEndpoint("anthropic") != tt.want.GetEndpoint("anthropic") {
+				t.Errorf("Anthropic Endpoint = %q, want %q", got.GetEndpoint("anthropic"), tt.want.GetEndpoint("anthropic"))
 			}
 			if got.APIKey != tt.want.APIKey {
 				t.Errorf("APIKey = %q, want %q", got.APIKey, tt.want.APIKey)
@@ -454,102 +435,24 @@ func TestFallbackConfigJSONUnmarshal(t *testing.T) {
 	}
 }
 
-func TestProviderGetUpstreamURL(t *testing.T) {
-	tests := []struct {
-		name     string
-		provider Provider
-		endpoint string
-		wantURL  string
-	}{
-		{
-			name: "OpenAI provider - appends chat/completions",
-			provider: Provider{
-				Type:    "openai",
-				BaseURL: "https://api.openai.com/v1",
-			},
-			endpoint: "/chat/completions",
-			wantURL:  "https://api.openai.com/v1/chat/completions",
-		},
-		{
-			name: "OpenAI provider - keeps existing chat/completions",
-			provider: Provider{
-				Type:    "openai",
-				BaseURL: "https://api.openai.com/v1/chat/completions",
-			},
-			endpoint: "/chat/completions",
-			wantURL:  "https://api.openai.com/v1/chat/completions",
-		},
-		{
-			name: "OpenAI provider - handles trailing slash",
-			provider: Provider{
-				Type:    "openai",
-				BaseURL: "https://api.openai.com/v1/",
-			},
-			endpoint: "/chat/completions",
-			wantURL:  "https://api.openai.com/v1/chat/completions",
-		},
-		{
-			name: "Anthropic provider - appends endpoint",
-			provider: Provider{
-				Type:    "anthropic",
-				BaseURL: "https://api.anthropic.com",
-			},
-			endpoint: "/v1/messages",
-			wantURL:  "https://api.anthropic.com/v1/messages",
-		},
-		{
-			name: "Anthropic provider - keeps existing v1/messages",
-			provider: Provider{
-				Type:    "anthropic",
-				BaseURL: "https://api.anthropic.com/v1/messages",
-			},
-			endpoint: "/v1/messages",
-			wantURL:  "https://api.anthropic.com/v1/messages",
-		},
-		{
-			name: "Anthropic provider - handles trailing slash",
-			provider: Provider{
-				Type:    "anthropic",
-				BaseURL: "https://api.minimax.io/anthropic/",
-			},
-			endpoint: "/v1/messages",
-			wantURL:  "https://api.minimax.io/anthropic/v1/messages",
-		},
-		{
-			name: "Anthropic provider - different endpoint doesn't match",
-			provider: Provider{
-				Type:    "anthropic",
-				BaseURL: "https://api.anthropic.com/v1/messages",
-			},
-			endpoint: "/v1/responses",
-			wantURL:  "https://api.anthropic.com/v1/messages",
-		},
-		{
-			name: "OpenAI provider - respects endpoint parameter for responses",
-			provider: Provider{
-				Type:    "openai",
-				BaseURL: "https://api.openai.com/v1",
-			},
-			endpoint: "/v1/responses",
-			wantURL:  "https://api.openai.com/v1/v1/responses",
-		},
-		{
-			name: "OpenAI provider - empty endpoint returns base URL",
-			provider: Provider{
-				Type:    "openai",
-				BaseURL: "https://api.openai.com/v1",
-			},
-			endpoint: "",
-			wantURL:  "https://api.openai.com/v1",
+func TestProviderGetEndpoint(t *testing.T) {
+	provider := Provider{
+		Name: "test-provider",
+		Endpoints: map[string]string{
+			"openai":    "https://api.example.com/v1/chat/completions",
+			"anthropic": "https://api.example.com/v1/messages",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := tt.provider.GetUpstreamURL(tt.endpoint)
-			if got != tt.wantURL {
-				t.Errorf("Provider.GetUpstreamURL(%q) = %q, want %q", tt.endpoint, got, tt.wantURL)
-			}
-		})
+	if got := provider.GetEndpoint("openai"); got != "https://api.example.com/v1/chat/completions" {
+		t.Errorf("GetEndpoint(openai) = %q, want %q", got, "https://api.example.com/v1/chat/completions")
+	}
+
+	if got := provider.GetEndpoint("anthropic"); got != "https://api.example.com/v1/messages" {
+		t.Errorf("GetEndpoint(anthropic) = %q, want %q", got, "https://api.example.com/v1/messages")
+	}
+
+	if got := provider.GetEndpoint("unknown"); got != "" {
+		t.Errorf("GetEndpoint(unknown) = %q, want empty string", got)
 	}
 }

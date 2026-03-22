@@ -1,9 +1,12 @@
 {
   "providers": [
     {
-      "name": "kimi-chutes",
-      "type": "openai",
-      "base_url": "https://llm.chutes.ai/v1/chat/completions",
+      "name": "kimi-k2",
+      "endpoints": {
+        "openai": "https://llm.chutes.ai/v1/chat/completions",
+        "anthropic": "https://llm.chutes.ai/v1/messages"
+      },
+      "default": "openai",
       "envApiKey": "CHUTES_API_KEY"
     },
     {
@@ -15,8 +18,9 @@
   ],
   "models": {
     "kimi-k2.5": {
-      "provider": "kimi-chutes",
+      "provider": "kimi-k2",
       "model": "moonshotai/Kimi-K2.5-TEE",
+      "type": "auto",
       "tool_call_transform": true
     },
     "claude-3-opus": {
@@ -27,8 +31,9 @@
   },
   "fallback": {
     "enabled": true,
-    "provider": "kimi-chutes",
+    "provider": "kimi-k2",
     "model": "{model}",
+    "type": "auto",
     "tool_call_transform": true
   }
 }

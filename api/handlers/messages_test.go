@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"ai-proxy/config"
+	"ai-proxy/router"
 	"ai-proxy/types"
 
 	"github.com/gin-gonic/gin"
@@ -87,18 +88,16 @@ func TestMessagesHandler_TransformRequest(t *testing.T) {
 }
 
 func TestMessagesHandler_UpstreamURL(t *testing.T) {
-	cfg := &config.Config{
-		AppConfig: &config.Schema{
-			Providers: []config.Provider{
-				{
-					Name:    "anthropic",
-					Type:    "anthropic",
-					BaseURL: "https://api.anthropic.com/v1/messages",
-				},
-			},
+	provider := config.Provider{
+		Name:      "anthropic",
+		Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
+	}
+	h := &MessagesHandler{
+		route: &router.ResolvedRoute{
+			Provider:       provider,
+			OutputProtocol: "anthropic",
 		},
 	}
-	h := &MessagesHandler{cfg: cfg}
 
 	expectedURL := "https://api.anthropic.com/v1/messages"
 	if got := h.UpstreamURL(); got != expectedURL {
@@ -107,18 +106,17 @@ func TestMessagesHandler_UpstreamURL(t *testing.T) {
 }
 
 func TestMessagesHandler_ResolveAPIKey(t *testing.T) {
-	cfg := &config.Config{
-		AppConfig: &config.Schema{
-			Providers: []config.Provider{
-				{
-					Name:   "anthropic",
-					Type:   "anthropic",
-					APIKey: "anthropic-api-key",
-				},
-			},
+	provider := config.Provider{
+		Name:      "anthropic",
+		Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"},
+		APIKey:    "anthropic-api-key",
+	}
+	h := &MessagesHandler{
+		route: &router.ResolvedRoute{
+			Provider:       provider,
+			OutputProtocol: "anthropic",
 		},
 	}
-	h := &MessagesHandler{cfg: cfg}
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
