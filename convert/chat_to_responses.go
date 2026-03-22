@@ -340,6 +340,18 @@ func (t *ChatToResponsesTransformer) handleChunk(chunk *types.Chunk) error {
 	choice := chunk.Choices[0]
 	delta := choice.Delta
 
+	// Handle reasoning_details field (MiniMax with reasoning_split enabled)
+	// This must come BEFORE content handling
+	if len(delta.ReasoningDetails) > 0 {
+		for _, rd := range delta.ReasoningDetails {
+			if rd.Text != "" {
+				if err := t.emitReasoningDelta(rd.Text); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// Process content BEFORE role check - chunks may have both role AND content
 	if delta.Content != "" {
 		return t.emitTextDelta(delta.Content)

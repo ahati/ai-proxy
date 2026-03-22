@@ -84,6 +84,11 @@ type ChatCompletionRequest struct {
 	// Values: "low", "medium", "high". Only for reasoning models (o1, o3, etc.)
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 
+	// ReasoningSplit enables separate reasoning output in streaming responses.
+	// When true, reasoning is returned in reasoning_details field instead of embedded in content.
+	// Supported by MiniMax M2.7 and potentially other providers.
+	ReasoningSplit bool `json:"reasoning_split,omitempty"`
+
 	// Deprecated: System field is non-standard. Use a system message in Messages array instead.
 	// Kept for backwards compatibility with existing clients.
 	System string `json:"system,omitempty"`
@@ -212,6 +217,21 @@ type Choice struct {
 	FinishReason *string `json:"finish_reason,omitempty"`
 }
 
+// ReasoningDetail represents a reasoning segment in streaming responses.
+// Used by providers like MiniMax when reasoning_split is enabled.
+type ReasoningDetail struct {
+	// Type identifies the reasoning content type (e.g., "reasoning.text").
+	Type string `json:"type"`
+	// ID is a unique identifier for this reasoning segment.
+	ID string `json:"id,omitempty"`
+	// Format indicates the reasoning format (e.g., "MiniMax-response-v1").
+	Format string `json:"format,omitempty"`
+	// Index is the position of this segment in the reasoning sequence.
+	Index int `json:"index,omitempty"`
+	// Text contains the actual reasoning content.
+	Text string `json:"text"`
+}
+
 // Delta represents the incremental content in a streaming response.
 // Each chunk adds to the accumulated response through its delta.
 type Delta struct {
@@ -227,6 +247,9 @@ type Delta struct {
 	// ReasoningContent is an alternative field for reasoning content.
 	// Some models use this instead of Reasoning.
 	ReasoningContent string `json:"reasoning_content,omitempty"`
+	// ReasoningDetails contains structured reasoning segments.
+	// Populated when reasoning_split is enabled for supported providers like MiniMax.
+	ReasoningDetails []ReasoningDetail `json:"reasoning_details,omitempty"`
 	// ToolCalls contains incremental tool call information.
 	// Tool calls are streamed incrementally across multiple chunks.
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`

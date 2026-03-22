@@ -1106,10 +1106,10 @@ func (t *ResponsesTransformer) EmitError(streamErr error) error {
 		"type":            "response.failed",
 		"sequence_number": t.outputIndex,
 		"response": map[string]interface{}{
-			"id":         t.responseID,
-			"object":     "response",
-			"model":      t.model,
-			"status":     "failed",
+			"id":     t.responseID,
+			"object": "response",
+			"model":  t.model,
+			"status": "failed",
 			"error": map[string]interface{}{
 				"message": streamErr.Error(),
 				"type":    "stream_error",

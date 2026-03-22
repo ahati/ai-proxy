@@ -9,6 +9,12 @@ import (
 	"os"
 )
 
+// isValidProtocol checks if the given string is a valid protocol name.
+// Valid protocols are: "openai", "anthropic", "responses".
+func isValidProtocol(p string) bool {
+	return p == "openai" || p == "anthropic" || p == "responses"
+}
+
 // Loader handles loading and validating configuration from JSON files.
 type Loader struct{}
 
@@ -48,8 +54,9 @@ func (l *Loader) Load(path string) (*Schema, error) {
 
 // validate checks that the configuration schema is valid according to the rules:
 //   - At least one provider required
-//   - Each provider must have: name, type, base_url
-//   - Provider type must be "openai" or "anthropic"
+//   - Each provider must have: name, endpoints (at least one)
+//   - Endpoints must use valid protocol names
+//   - If multiple endpoints, default must be specified and valid
 //   - At least one API key source (apiKey or envApiKey) per provider
 //   - Model mappings must reference existing providers
 //   - If fallback.enabled, provider must exist
@@ -77,14 +84,37 @@ func (l *Loader) validate(s *Schema) error {
 			return fmt.Errorf("provider '%s': name is required", providerLabel)
 		}
 
-		// Validate type
-		if p.Type != "openai" && p.Type != "anthropic" {
-			return fmt.Errorf("provider '%s': type must be 'openai' or 'anthropic'", p.Name)
+		// Validate endpoints is required and has at least one entry
+		if len(p.Endpoints) == 0 {
+			return fmt.Errorf("provider '%s': endpoints is required with at least one protocol endpoint", p.Name)
 		}
 
-		// Validate base_url is required
-		if p.BaseURL == "" {
-			return fmt.Errorf("provider '%s': base_url is required", p.Name)
+		// Validate endpoints format
+		for protocol := range p.Endpoints {
+			if !isValidProtocol(protocol) {
+				return fmt.Errorf("provider '%s': invalid protocol '%s' in endpoints (must be openai, anthropic, or responses)", p.Name, protocol)
+			}
+		}
+
+		// Multi-protocol providers must have a default if more than one endpoint
+		if len(p.Endpoints) > 1 {
+			if p.Default == "" {
+				return fmt.Errorf("provider '%s': 'default' field is required when multiple endpoints are configured", p.Name)
+			}
+			if !isValidProtocol(p.Default) {
+				return fmt.Errorf("provider '%s': default protocol '%s' is invalid (must be openai, anthropic, or responses)", p.Name, p.Default)
+			}
+			if _, exists := p.Endpoints[p.Default]; !exists {
+				return fmt.Errorf("provider '%s': default protocol '%s' not found in endpoints", p.Name, p.Default)
+			}
+		} else if p.Default != "" {
+			// Single-endpoint providers: validate Default if explicitly set
+			if !isValidProtocol(p.Default) {
+				return fmt.Errorf("provider '%s': default protocol '%s' is invalid (must be openai, anthropic, or responses)", p.Name, p.Default)
+			}
+			if _, exists := p.Endpoints[p.Default]; !exists {
+				return fmt.Errorf("provider '%s': default protocol '%s' not found in endpoints", p.Name, p.Default)
+			}
 		}
 
 		// Validate at least one API key source
@@ -96,9 +126,14 @@ func (l *Loader) validate(s *Schema) error {
 	}
 
 	// Validate model mappings reference existing providers
-	for modelName, modelConfig := range s.Models {
-		if !providerNames[modelConfig.Provider] {
-			return fmt.Errorf("model '%s' references unknown provider '%s'", modelName, modelConfig.Provider)
+	for name, mc := range s.Models {
+		if !providerNames[mc.Provider] {
+			return fmt.Errorf("model '%s' references unknown provider '%s'", name, mc.Provider)
+		}
+
+		// Validate type field if present
+		if mc.Type != "" && mc.Type != "openai" && mc.Type != "anthropic" && mc.Type != "auto" {
+			return fmt.Errorf("model '%s': type must be 'openai', 'anthropic', or 'auto'", name)
 		}
 	}
 
@@ -106,6 +141,11 @@ func (l *Loader) validate(s *Schema) error {
 	if s.Fallback.Enabled {
 		if !providerNames[s.Fallback.Provider] {
 			return fmt.Errorf("fallback references unknown provider '%s'", s.Fallback.Provider)
+		}
+
+		// Validate fallback type field if present
+		if s.Fallback.Type != "" && s.Fallback.Type != "openai" && s.Fallback.Type != "anthropic" && s.Fallback.Type != "auto" {
+			return fmt.Errorf("fallback: type must be 'openai', 'anthropic', or 'auto'")
 		}
 	}
 

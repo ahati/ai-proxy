@@ -4,7 +4,6 @@ package config
 
 import (
 	"os"
-	"strings"
 )
 
 // Provider defines an upstream API provider configuration.
@@ -12,10 +11,15 @@ import (
 type Provider struct {
 	// Name is the unique identifier for this provider.
 	Name string `json:"name"`
-	// Type specifies the provider API format: "openai" or "anthropic".
-	Type string `json:"type"`
-	// BaseURL is the base URL for the provider's API endpoint.
-	BaseURL string `json:"base_url"`
+	// Endpoints maps protocol names to their specific endpoint URLs.
+	// Required: at least one endpoint must be specified.
+	// Protocols: "openai", "anthropic", "responses"
+	// Example: {"openai": "https://api.provider.com/v1/chat/completions"}
+	Endpoints map[string]string `json:"endpoints"`
+	// Default specifies the default protocol for multi-protocol providers.
+	// Required when Endpoints has more than one entry.
+	// Must be one of: "openai", "anthropic", "responses".
+	Default string `json:"default,omitempty"`
 	// APIKey is the direct API key for authentication (optional).
 	// If not set, EnvAPIKey is used to fetch from environment.
 	APIKey string `json:"apiKey,omitempty"`
@@ -36,26 +40,49 @@ func (p *Provider) GetAPIKey() string {
 	return os.Getenv(p.EnvAPIKey)
 }
 
-// GetUpstreamURL returns the full upstream URL for the given API endpoint.
-// Appends the endpoint to the base URL if not already present.
-// If the base URL already has an API endpoint path (contains "/v1/" followed by
-// additional path components), it is considered already configured and the endpoint
-// is not appended.
+// GetEndpoint returns the endpoint URL for the specified protocol.
 //
-// @param endpoint - the API endpoint path (e.g., "/v1/messages", "/chat/completions", "/v1/responses")
-// @return string - the complete upstream URL
-func (p *Provider) GetUpstreamURL(endpoint string) string {
-	baseURL := strings.TrimSuffix(p.BaseURL, "/")
-	// If base URL already has an API endpoint path (contains /v1/ with more path after it),
-	// it's already configured - don't append anything
-	if strings.Contains(baseURL, "/v1/") {
-		return baseURL
+// @param protocol - the protocol name ("openai", "anthropic", "responses")
+// @return the endpoint URL, or empty string if not found
+func (p *Provider) GetEndpoint(protocol string) string {
+	return p.Endpoints[protocol]
+}
+
+// SupportedProtocols returns the list of protocols this provider supports.
+//
+// @return slice of supported protocol names
+func (p *Provider) SupportedProtocols() []string {
+	protocols := make([]string, 0, len(p.Endpoints))
+	for protocol := range p.Endpoints {
+		protocols = append(protocols, protocol)
 	}
-	// Otherwise, append the endpoint if provided
-	if endpoint != "" && !strings.HasSuffix(baseURL, endpoint) {
-		baseURL = baseURL + endpoint
+	return protocols
+}
+
+// HasProtocol checks if the provider supports the given protocol.
+//
+// @param protocol - the protocol to check
+// @return true if the protocol is supported
+func (p *Provider) HasProtocol(protocol string) bool {
+	_, exists := p.Endpoints[protocol]
+	return exists
+}
+
+// GetDefaultProtocol returns the default protocol for this provider.
+// Returns the configured Default field, or the only protocol if single-endpoint.
+//
+// @return the default protocol name, or empty string if none configured
+func (p *Provider) GetDefaultProtocol() string {
+	if p.Default != "" {
+		return p.Default
 	}
-	return baseURL
+	// Single protocol: return the only one
+	if len(p.Endpoints) == 1 {
+		for protocol := range p.Endpoints {
+			return protocol
+		}
+	}
+	return ""
 }
 
 // ModelConfig defines how a model alias maps to a specific provider and model.
@@ -65,9 +92,18 @@ type ModelConfig struct {
 	Provider string `json:"provider"`
 	// Model is the actual model identifier to use on the upstream provider.
 	Model string `json:"model"`
+	// Type specifies the output protocol: "openai", "anthropic", or "auto".
+	// "auto" means use the incoming request's protocol for passthrough.
+	// Empty defaults to provider's default protocol.
+	Type string `json:"type,omitempty"`
 	// ToolCallTransform enables tool call transformation for this model.
 	// When true, tool calls are transformed between OpenAI and Anthropic formats.
 	ToolCallTransform bool `json:"tool_call_transform"`
+	// ReasoningSplit enables separate reasoning output for providers that support it.
+	// When true, adds "reasoning_split": true to the ChatCompletionRequest.
+	// Supported by MiniMax M2.7 to return reasoning in reasoning_details field
+	// instead of embedded aisaI tags in content.
+	ReasoningSplit bool `json:"reasoning_split,omitempty"`
 }
 
 // FallbackConfig defines the fallback behavior when a request fails.
@@ -79,8 +115,12 @@ type FallbackConfig struct {
 	Provider string `json:"provider"`
 	// Model is the model to use for fallback requests.
 	Model string `json:"model"`
+	// Type specifies the output protocol for fallback: "openai", "anthropic", or "auto".
+	Type string `json:"type,omitempty"`
 	// ToolCallTransform enables tool call transformation for fallback requests.
 	ToolCallTransform bool `json:"tool_call_transform"`
+	// ReasoningSplit enables separate reasoning output for fallback requests.
+	ReasoningSplit bool `json:"reasoning_split,omitempty"`
 }
 
 // Schema is the root configuration structure for the multi-provider proxy.

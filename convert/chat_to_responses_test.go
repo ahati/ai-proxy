@@ -1122,3 +1122,174 @@ func TestChatToResponses_StoreConversation_CombinesMessageAndToolCall(t *testing
 func strPtr(s string) *string {
 	return &s
 }
+
+func TestChatToResponsesTransformer_ReasoningDetails(t *testing.T) {
+	t.Run("reasoning_details converted to reasoning events", func(t *testing.T) {
+		var buf bytes.Buffer
+		transformer := NewChatToResponsesTransformer(&buf)
+
+		// Simulate MiniMax response with reasoning_details
+		chunks := []types.Chunk{
+			{
+				ID:     "resp_123",
+				Object: "chat.completion.chunk",
+				Model:  "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index: 0,
+						Delta: types.Delta{
+							Role: "assistant",
+							ReasoningDetails: []types.ReasoningDetail{
+								{Type: "reasoning.text", ID: "rs-1", Format: "MiniMax-response-v1", Index: 0, Text: "The user is asking..."},
+							},
+						},
+					},
+				},
+			},
+			{
+				ID:     "resp_123",
+				Object: "chat.completion.chunk",
+				Model:  "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index: 0,
+						Delta: types.Delta{
+							ReasoningDetails: []types.ReasoningDetail{
+								{Type: "reasoning.text", Text: " Let me think..."},
+							},
+						},
+					},
+				},
+			},
+			{
+				ID:     "resp_123",
+				Object: "chat.completion.chunk",
+				Model:  "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index: 0,
+						Delta: types.Delta{
+							Content: "Hello!",
+						},
+					},
+				},
+			},
+			{
+				ID:     "resp_123",
+				Object: "chat.completion.chunk",
+				Model:  "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index:        0,
+						FinishReason: strPtr("stop"),
+						Delta:        types.Delta{},
+					},
+				},
+				Usage: &types.Usage{
+					PromptTokens:     10,
+					CompletionTokens: 5,
+					TotalTokens:      15,
+				},
+			},
+		}
+
+		for _, chunk := range chunks {
+			data, _ := json.Marshal(chunk)
+			event := &sse.Event{Data: string(data)}
+			if err := transformer.Transform(event); err != nil {
+				t.Fatalf("Transform error: %v", err)
+			}
+		}
+
+		// Close to finalize
+		if err := transformer.Close(); err != nil {
+			t.Fatalf("Close error: %v", err)
+		}
+
+		output := buf.String()
+		t.Logf("Output:\n%s", output)
+
+		// Should contain reasoning summary text delta events
+		if !strings.Contains(output, "response.reasoning_summary_text.delta") {
+			t.Error("Output should contain response.reasoning_summary_text.delta events")
+		}
+		if !strings.Contains(output, "The user is asking...") {
+			t.Error("Output should contain reasoning text")
+		}
+		if !strings.Contains(output, "Hello!") {
+			t.Error("Output should contain response text")
+		}
+	})
+
+	t.Run("multiple reasoning_details in single chunk", func(t *testing.T) {
+		var buf bytes.Buffer
+		transformer := NewChatToResponsesTransformer(&buf)
+
+		chunk := types.Chunk{
+			ID:     "resp_456",
+			Object: "chat.completion.chunk",
+			Model:  "MiniMax-M2.7",
+			Choices: []types.Choice{
+				{
+					Index: 0,
+					Delta: types.Delta{
+						Role: "assistant",
+						ReasoningDetails: []types.ReasoningDetail{
+							{Type: "reasoning.text", Text: "First thought..."},
+							{Type: "reasoning.text", Text: "Second thought..."},
+						},
+					},
+				},
+			},
+		}
+
+		data, _ := json.Marshal(chunk)
+		event := &sse.Event{Data: string(data)}
+		if err := transformer.Transform(event); err != nil {
+			t.Fatalf("Transform error: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "First thought...") {
+			t.Error("Output should contain first reasoning text")
+		}
+		if !strings.Contains(output, "Second thought...") {
+			t.Error("Output should contain second reasoning text")
+		}
+	})
+
+	t.Run("empty reasoning_details ignored", func(t *testing.T) {
+		var buf bytes.Buffer
+		transformer := NewChatToResponsesTransformer(&buf)
+
+		chunk := types.Chunk{
+			ID:     "resp_789",
+			Object: "chat.completion.chunk",
+			Model:  "MiniMax-M2.7",
+			Choices: []types.Choice{
+				{
+					Index: 0,
+					Delta: types.Delta{
+						Role: "assistant",
+						ReasoningDetails: []types.ReasoningDetail{
+							{Type: "reasoning.text", Text: ""},
+						},
+						Content: "Hello!",
+					},
+				},
+			},
+		}
+
+		data, _ := json.Marshal(chunk)
+		event := &sse.Event{Data: string(data)}
+		if err := transformer.Transform(event); err != nil {
+			t.Fatalf("Transform error: %v", err)
+		}
+
+		output := buf.String()
+		// Should still have content
+		if !strings.Contains(output, "Hello!") {
+			t.Error("Output should contain response text")
+		}
+	})
+}

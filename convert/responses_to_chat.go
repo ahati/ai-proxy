@@ -17,11 +17,20 @@ import (
 )
 
 // ResponsesToChatConverter converts OpenAI ResponsesRequest to ChatCompletionRequest.
-type ResponsesToChatConverter struct{}
+type ResponsesToChatConverter struct {
+	reasoningSplit bool
+}
 
 // NewResponsesToChatConverter creates a new converter for Responses to Chat format.
 func NewResponsesToChatConverter() *ResponsesToChatConverter {
 	return &ResponsesToChatConverter{}
+}
+
+// SetReasoningSplit enables reasoning_split in the output ChatCompletionRequest.
+// When enabled, supported providers like MiniMax will return reasoning in a
+// separate reasoning_details field instead of embedded in content.
+func (c *ResponsesToChatConverter) SetReasoningSplit(enabled bool) {
+	c.reasoningSplit = enabled
 }
 
 // Convert transforms a ResponsesRequest body to ChatCompletionRequest format.
@@ -94,6 +103,11 @@ func (c *ResponsesToChatConverter) convertRequest(req *types.ResponsesRequest) *
 	// Forward reasoning effort to Chat Completions
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
 		chatReq.ReasoningEffort = req.Reasoning.Effort
+	}
+
+	// Enable reasoning_split if configured (for MiniMax and similar providers)
+	if c.reasoningSplit {
+		chatReq.ReasoningSplit = true
 	}
 
 	// Convert metadata.user_id to user field

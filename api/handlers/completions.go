@@ -79,8 +79,8 @@ func (h *CompletionsHandler) ValidateRequest(body []byte) error {
 		return nil // Let upstream handle missing model
 	}
 
-	// Resolve the model to a route
-	route, err := h.modelRouter.Resolve(req.Model)
+	// Resolve the model to a route (incoming protocol is OpenAI for completions endpoint)
+	route, err := h.modelRouter.ResolveWithProtocol(req.Model, "openai")
 	if err != nil {
 		return nil // Use fallback behavior
 	}
@@ -110,7 +110,12 @@ func (h *CompletionsHandler) TransformRequest(body []byte) ([]byte, error) {
 	}
 	req["model"] = h.route.Model
 
-	switch h.route.Provider.Type {
+	// Passthrough optimization - no transformation needed
+	if h.route.IsPassthrough {
+		return json.Marshal(req)
+	}
+
+	switch h.route.OutputProtocol {
 	case "anthropic":
 		// Convert OpenAI ChatCompletionRequest to Anthropic MessageRequest
 		updatedBody, err := json.Marshal(req)
@@ -127,9 +132,15 @@ func (h *CompletionsHandler) TransformRequest(body []byte) ([]byte, error) {
 				"include_usage": true,
 			}
 		}
+
+		// Inject reasoning_split if configured
+		if h.route.ReasoningSplit {
+			req["reasoning_split"] = true
+		}
+
 		return json.Marshal(req)
 	default:
-		// Unknown provider type - pass through as-is
+		// Unknown protocol - pass through as-is
 		return json.Marshal(req)
 	}
 }
@@ -139,15 +150,9 @@ func (h *CompletionsHandler) TransformRequest(body []byte) ([]byte, error) {
 // @return URL string for the upstream API endpoint.
 func (h *CompletionsHandler) UpstreamURL() string {
 	if h.route != nil {
-		// Select endpoint based on provider type
-		endpoint := "/chat/completions"
-		if h.route.Provider.Type == "anthropic" {
-			endpoint = "/v1/messages"
-		}
-		return h.route.Provider.GetUpstreamURL(endpoint)
+		return h.route.Provider.GetEndpoint(h.route.OutputProtocol)
 	}
-	// Legacy behavior - use OpenAI upstream
-	return h.cfg.GetOpenAIUpstreamURL()
+	return ""
 }
 
 // ResolveAPIKey returns the API key for the resolved provider.
@@ -158,8 +163,7 @@ func (h *CompletionsHandler) ResolveAPIKey(c *gin.Context) string {
 	if h.route != nil {
 		return h.route.Provider.GetAPIKey()
 	}
-	// Legacy behavior
-	return h.cfg.GetOpenAIUpstreamAPIKey()
+	return ""
 }
 
 // ForwardHeaders copies headers to the upstream request based on provider type.
@@ -169,12 +173,12 @@ func (h *CompletionsHandler) ResolveAPIKey(c *gin.Context) string {
 // @param c - Gin context containing the original request headers.
 // @param req - Upstream request to receive forwarded headers.
 func (h *CompletionsHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
-	providerType := "openai" // default
+	outputProtocol := "openai" // default
 	if h.route != nil {
-		providerType = h.route.Provider.Type
+		outputProtocol = h.route.OutputProtocol
 	}
 
-	switch providerType {
+	switch outputProtocol {
 	case "anthropic":
 		// Forward headers that are important for Anthropic API
 		for k, v := range c.Request.Header {
@@ -204,7 +208,12 @@ func (h *CompletionsHandler) CreateTransformer(w io.Writer) transform.SSETransfo
 		return toolcall.NewOpenAITransformer(w)
 	}
 
-	switch h.route.Provider.Type {
+	// Passthrough: no transformation needed
+	if h.route.IsPassthrough && !h.route.ToolCallTransform {
+		return transform.NewPassthroughTransformer(w)
+	}
+
+	switch h.route.OutputProtocol {
 	case "anthropic":
 		// Convert Anthropic responses back to OpenAI Chat format
 		return convert.NewChatToAnthropicTransformer(w)

@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -686,6 +687,166 @@ func TestToolFunctionParameters(t *testing.T) {
 		want := `{"name":"test"}`
 		if string(data) != want {
 			t.Errorf("got %s, want %s", data, want)
+		}
+	})
+}
+
+func TestReasoningSplit(t *testing.T) {
+	t.Run("reasoning_split in request", func(t *testing.T) {
+		req := ChatCompletionRequest{
+			Model:          "MiniMax-M2.7",
+			Messages:       []Message{{Role: "user", Content: "hello"}},
+			ReasoningSplit: true,
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		want := `{"model":"MiniMax-M2.7","messages":[{"role":"user","content":"hello"}],"reasoning_split":true}`
+		if string(data) != want {
+			t.Errorf("got %s, want %s", data, want)
+		}
+	})
+
+	t.Run("reasoning_split false by default", func(t *testing.T) {
+		req := ChatCompletionRequest{
+			Model:    "gpt-4",
+			Messages: []Message{{Role: "user", Content: "hello"}},
+		}
+		data, err := json.Marshal(req)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		if strings.Contains(string(data), "reasoning_split") {
+			t.Errorf("reasoning_split should not be present when false, got %s", data)
+		}
+	})
+}
+
+func TestReasoningDetails(t *testing.T) {
+	t.Run("reasoning_details in delta", func(t *testing.T) {
+		delta := Delta{
+			ReasoningDetails: []ReasoningDetail{
+				{Type: "reasoning.text", ID: "reasoning-text-1", Format: "MiniMax-response-v1", Text: "The user is asking..."},
+			},
+		}
+		data, err := json.Marshal(delta)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		want := `{"reasoning_details":[{"type":"reasoning.text","id":"reasoning-text-1","format":"MiniMax-response-v1","text":"The user is asking..."}]}`
+		if string(data) != want {
+			t.Errorf("got %s, want %s", data, want)
+		}
+	})
+
+	t.Run("reasoning_details with index", func(t *testing.T) {
+		delta := Delta{
+			ReasoningDetails: []ReasoningDetail{
+				{Type: "reasoning.text", ID: "rs-1", Index: 1, Text: "thinking..."},
+			},
+		}
+		data, err := json.Marshal(delta)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		want := `{"reasoning_details":[{"type":"reasoning.text","id":"rs-1","index":1,"text":"thinking..."}]}`
+		if string(data) != want {
+			t.Errorf("got %s, want %s", data, want)
+		}
+	})
+
+	t.Run("parse reasoning_details from json", func(t *testing.T) {
+		jsonStr := `{"reasoning_details":[{"type":"reasoning.text","id":"rs-1","text":"thinking..."}]}`
+		var delta Delta
+		if err := json.Unmarshal([]byte(jsonStr), &delta); err != nil {
+			t.Fatalf("unmarshal error: %v", err)
+		}
+		if len(delta.ReasoningDetails) != 1 {
+			t.Fatalf("expected 1 reasoning detail, got %d", len(delta.ReasoningDetails))
+		}
+		rd := delta.ReasoningDetails[0]
+		if rd.Type != "reasoning.text" {
+			t.Errorf("type mismatch: got %s", rd.Type)
+		}
+		if rd.Text != "thinking..." {
+			t.Errorf("text mismatch: got %s", rd.Text)
+		}
+	})
+
+	t.Run("multiple reasoning_details", func(t *testing.T) {
+		delta := Delta{
+			ReasoningDetails: []ReasoningDetail{
+				{Type: "reasoning.text", Text: "First thought..."},
+				{Type: "reasoning.text", Text: "Second thought..."},
+			},
+		}
+		data, err := json.Marshal(delta)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		var parsed Delta
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			t.Fatalf("unmarshal error: %v", err)
+		}
+		if len(parsed.ReasoningDetails) != 2 {
+			t.Errorf("expected 2 reasoning details, got %d", len(parsed.ReasoningDetails))
+		}
+	})
+
+	t.Run("reasoning_details with content", func(t *testing.T) {
+		delta := Delta{
+			Content: "Hello!",
+			ReasoningDetails: []ReasoningDetail{
+				{Type: "reasoning.text", Text: "thinking..."},
+			},
+		}
+		data, err := json.Marshal(delta)
+		if err != nil {
+			t.Fatalf("marshal error: %v", err)
+		}
+		want := `{"content":"Hello!","reasoning_details":[{"type":"reasoning.text","text":"thinking..."}]}`
+		if string(data) != want {
+			t.Errorf("got %s, want %s", data, want)
+		}
+	})
+}
+
+func TestReasoningDetailParsing(t *testing.T) {
+	t.Run("MiniMax format", func(t *testing.T) {
+		jsonStr := `{"type":"reasoning.text","id":"reasoning-text-1","format":"MiniMax-response-v1","index":0,"text":"The user said hi"}`
+		var rd ReasoningDetail
+		if err := json.Unmarshal([]byte(jsonStr), &rd); err != nil {
+			t.Fatalf("unmarshal error: %v", err)
+		}
+		if rd.Type != "reasoning.text" {
+			t.Errorf("type mismatch: got %s", rd.Type)
+		}
+		if rd.ID != "reasoning-text-1" {
+			t.Errorf("id mismatch: got %s", rd.ID)
+		}
+		if rd.Format != "MiniMax-response-v1" {
+			t.Errorf("format mismatch: got %s", rd.Format)
+		}
+		if rd.Index != 0 {
+			t.Errorf("index mismatch: got %d", rd.Index)
+		}
+		if rd.Text != "The user said hi" {
+			t.Errorf("text mismatch: got %s", rd.Text)
+		}
+	})
+
+	t.Run("minimal reasoning detail", func(t *testing.T) {
+		jsonStr := `{"type":"reasoning.text","text":"thinking"}`
+		var rd ReasoningDetail
+		if err := json.Unmarshal([]byte(jsonStr), &rd); err != nil {
+			t.Fatalf("unmarshal error: %v", err)
+		}
+		if rd.Type != "reasoning.text" {
+			t.Errorf("type mismatch: got %s", rd.Type)
+		}
+		if rd.Text != "thinking" {
+			t.Errorf("text mismatch: got %s", rd.Text)
 		}
 	})
 }

@@ -39,16 +39,14 @@ func TestNewServer(t *testing.T) {
 				AppConfig: &config.Schema{
 					Providers: []config.Provider{
 						{
-							Name:    "openai",
-							Type:    "openai",
-							BaseURL: "https://api.example.com/v1",
-							APIKey:  "test-key",
+							Name:      "openai",
+							Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
+							APIKey:    "test-key",
 						},
 						{
-							Name:    "anthropic",
-							Type:    "anthropic",
-							BaseURL: "https://api.anthropic.com/v1",
-							APIKey:  "anthropic-key",
+							Name:      "anthropic",
+							Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1"},
+							APIKey:    "anthropic-key",
 						},
 					},
 				},
@@ -209,8 +207,8 @@ func TestServer_Routes_Models(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	server.router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("expected status %d (unauthorized without API key), got %d", http.StatusUnauthorized, w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status %d (no config loaded), got %d", http.StatusInternalServerError, w.Code)
 	}
 }
 
@@ -219,9 +217,9 @@ func TestServer_Routes_Models_WithAPIKey(t *testing.T) {
 		AppConfig: &config.Schema{
 			Providers: []config.Provider{
 				{
-					Name:   "openai",
-					Type:   "openai",
-					APIKey: "test-key",
+					Name:      "openai",
+					Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
+					APIKey:    "test-key",
 				},
 			},
 		},
@@ -332,10 +330,9 @@ func TestNewServer_SetsConfigCorrectly(t *testing.T) {
 		AppConfig: &config.Schema{
 			Providers: []config.Provider{
 				{
-					Name:    "openai",
-					Type:    "openai",
-					BaseURL: "https://upstream.example.com",
-					APIKey:  "test-api-key",
+					Name:      "openai",
+					Endpoints: map[string]string{"openai": "https://upstream.example.com"},
+					APIKey:    "test-api-key",
 				},
 			},
 		},
@@ -344,14 +341,12 @@ func TestNewServer_SetsConfigCorrectly(t *testing.T) {
 
 	server := NewServer(cfg)
 
-	expectedURL := "https://upstream.example.com"
-	if server.config.GetOpenAIUpstreamURL() != expectedURL {
-		t.Errorf("expected OpenAIUpstreamURL %s, got %s", expectedURL, server.config.GetOpenAIUpstreamURL())
-	}
-
-	expectedKey := "test-api-key"
-	if server.config.GetOpenAIUpstreamAPIKey() != expectedKey {
-		t.Errorf("expected OpenAIUpstreamAPIKey %s, got %s", expectedKey, server.config.GetOpenAIUpstreamAPIKey())
+	if server.config.AppConfig == nil {
+		t.Error("expected AppConfig to be set")
+	} else if len(server.config.AppConfig.Providers) != 1 {
+		t.Errorf("expected 1 provider, got %d", len(server.config.AppConfig.Providers))
+	} else if server.config.AppConfig.Providers[0].Name != "openai" {
+		t.Errorf("expected provider name 'openai', got %s", server.config.AppConfig.Providers[0].Name)
 	}
 
 	if server.config.Port != cfg.Port {

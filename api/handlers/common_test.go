@@ -720,10 +720,9 @@ func TestNewCompletionsHandler(t *testing.T) {
 		AppConfig: &config.Schema{
 			Providers: []config.Provider{
 				{
-					Name:    "openai",
-					Type:    "openai",
-					BaseURL: "https://api.example.com/v1/chat/completions",
-					APIKey:  "test-key",
+					Name:      "openai",
+					Endpoints: map[string]string{"openai": "https://api.example.com/v1/chat/completions"},
+					APIKey:    "test-key",
 				},
 			},
 		},
@@ -740,10 +739,9 @@ func TestNewMessagesHandler(t *testing.T) {
 		AppConfig: &config.Schema{
 			Providers: []config.Provider{
 				{
-					Name:    "anthropic",
-					Type:    "anthropic",
-					BaseURL: "https://api.anthropic.com/v1/messages",
-					APIKey:  "test-key",
+					Name:      "anthropic",
+					Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
+					APIKey:    "test-key",
 				},
 			},
 		},
@@ -760,10 +758,9 @@ func TestNewModelsHandler(t *testing.T) {
 		AppConfig: &config.Schema{
 			Providers: []config.Provider{
 				{
-					Name:    "openai",
-					Type:    "openai",
-					BaseURL: "https://api.example.com/v1/chat/completions",
-					APIKey:  "test-key",
+					Name:      "openai",
+					Endpoints: map[string]string{"openai": "https://api.example.com/v1/chat/completions"},
+					APIKey:    "test-key",
 				},
 			},
 		},

@@ -1735,3 +1735,158 @@ func TestChatToAnthropicTransformer_AbruptClose(t *testing.T) {
 		}
 	}
 }
+
+func TestChatToAnthropicTransformer_ReasoningDetails(t *testing.T) {
+	t.Run("reasoning_details converted to thinking blocks", func(t *testing.T) {
+		var buf bytes.Buffer
+		transformer := NewChatToAnthropicTransformer(&buf)
+
+		chunks := []types.Chunk{
+			{
+				ID:    "chatcmpl-123",
+				Model: "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index: 0,
+						Delta: types.Delta{
+							Role: "assistant",
+							ReasoningDetails: []types.ReasoningDetail{
+								{Type: "reasoning.text", Text: "The user is asking..."},
+							},
+						},
+					},
+				},
+			},
+			{
+				ID:    "chatcmpl-123",
+				Model: "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index: 0,
+						Delta: types.Delta{
+							ReasoningDetails: []types.ReasoningDetail{
+								{Type: "reasoning.text", Text: " Let me analyze..."},
+							},
+						},
+					},
+				},
+			},
+			{
+				ID:    "chatcmpl-123",
+				Model: "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index: 0,
+						Delta: types.Delta{
+							Content: "Hello!",
+						},
+					},
+				},
+			},
+			{
+				ID:    "chatcmpl-123",
+				Model: "MiniMax-M2.7",
+				Choices: []types.Choice{
+					{
+						Index:        0,
+						FinishReason: strPtr("stop"),
+					},
+				},
+				Usage: &types.Usage{
+					PromptTokens:     10,
+					CompletionTokens: 20,
+					TotalTokens:      30,
+				},
+			},
+		}
+
+		for _, chunk := range chunks {
+			data, _ := json.Marshal(chunk)
+			if err := transformer.Transform(&sse.Event{Data: string(data)}); err != nil {
+				t.Fatalf("Transform error: %v", err)
+			}
+		}
+
+		output := buf.String()
+		t.Logf("Output:\n%s", output)
+
+		// Should contain thinking delta events
+		if !contains(output, `"type":"thinking_delta"`) {
+			t.Error("Output should contain thinking_delta events")
+		}
+		if !contains(output, "The user is asking...") {
+			t.Error("Output should contain reasoning text")
+		}
+		if !contains(output, "Hello!") {
+			t.Error("Output should contain response text")
+		}
+	})
+
+	t.Run("multiple reasoning_details in single chunk", func(t *testing.T) {
+		var buf bytes.Buffer
+		transformer := NewChatToAnthropicTransformer(&buf)
+
+		chunk := types.Chunk{
+			ID:    "chatcmpl-456",
+			Model: "MiniMax-M2.7",
+			Choices: []types.Choice{
+				{
+					Index: 0,
+					Delta: types.Delta{
+						Role: "assistant",
+						ReasoningDetails: []types.ReasoningDetail{
+							{Type: "reasoning.text", Text: "First thought..."},
+							{Type: "reasoning.text", Text: "Second thought..."},
+						},
+					},
+				},
+			},
+		}
+
+		data, _ := json.Marshal(chunk)
+		if err := transformer.Transform(&sse.Event{Data: string(data)}); err != nil {
+			t.Fatalf("Transform error: %v", err)
+		}
+
+		output := buf.String()
+		if !contains(output, "First thought...") {
+			t.Error("Output should contain first reasoning text")
+		}
+		if !contains(output, "Second thought...") {
+			t.Error("Output should contain second reasoning text")
+		}
+	})
+
+	t.Run("empty reasoning_details text ignored", func(t *testing.T) {
+		var buf bytes.Buffer
+		transformer := NewChatToAnthropicTransformer(&buf)
+
+		chunk := types.Chunk{
+			ID:    "chatcmpl-789",
+			Model: "MiniMax-M2.7",
+			Choices: []types.Choice{
+				{
+					Index: 0,
+					Delta: types.Delta{
+						Role: "assistant",
+						ReasoningDetails: []types.ReasoningDetail{
+							{Type: "reasoning.text", Text: ""},
+						},
+						Content: "Hello!",
+					},
+				},
+			},
+		}
+
+		data, _ := json.Marshal(chunk)
+		if err := transformer.Transform(&sse.Event{Data: string(data)}); err != nil {
+			t.Fatalf("Transform error: %v", err)
+		}
+
+		output := buf.String()
+		// Should have content but no thinking_delta for empty text
+		if !contains(output, "Hello!") {
+			t.Error("Output should contain response text")
+		}
+	})
+}

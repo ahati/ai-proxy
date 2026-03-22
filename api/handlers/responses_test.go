@@ -57,16 +57,21 @@ func (m *mockRouter) ListModels() []string {
 	return models
 }
 
+func (m *mockRouter) ResolveWithProtocol(modelName, incomingProtocol string) (*router.ResolvedRoute, error) {
+	// For mock, just return the base route - protocol handling is tested in router package
+	return m.Resolve(modelName)
+}
+
 // TestResponsesHandler_ValidateRequest tests request validation.
 func TestResponsesHandler_ValidateRequest(t *testing.T) {
 	mockR := newMockRouter()
 	mockR.models["gpt-4o"] = &router.ResolvedRoute{
 		Provider: config.Provider{
-			Name:    "openai",
-			Type:    "openai",
-			BaseURL: "https://api.openai.com/v1",
+			Name:      "openai",
+			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
 		},
-		Model: "gpt-4o",
+		Model:          "gpt-4o",
+		OutputProtocol: "openai",
 	}
 
 	tests := []struct {
@@ -125,11 +130,11 @@ func TestResponsesHandler_TransformRequest_OpenAI(t *testing.T) {
 	mockR := newMockRouter()
 	mockR.models["gpt-4o"] = &router.ResolvedRoute{
 		Provider: config.Provider{
-			Name:    "openai",
-			Type:    "openai",
-			BaseURL: "https://api.openai.com/v1",
+			Name:      "openai",
+			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
 		},
-		Model: "gpt-4o",
+		Model:          "gpt-4o",
+		OutputProtocol: "openai",
 	}
 
 	handler := &ResponsesHandler{
@@ -172,11 +177,11 @@ func TestResponsesHandler_TransformRequest_Anthropic(t *testing.T) {
 	mockR := newMockRouter()
 	mockR.models["claude-3-opus"] = &router.ResolvedRoute{
 		Provider: config.Provider{
-			Name:    "anthropic",
-			Type:    "anthropic",
-			BaseURL: "https://api.anthropic.com/v1/messages",
+			Name:      "anthropic",
+			Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
 		},
-		Model: "claude-3-opus-20240229",
+		Model:          "claude-3-opus-20240229",
+		OutputProtocol: "anthropic",
 	}
 
 	handler := &ResponsesHandler{
@@ -217,49 +222,31 @@ func TestResponsesHandler_TransformRequest_Anthropic(t *testing.T) {
 // TestResponsesHandler_UpstreamURL tests upstream URL generation.
 // Note: OpenAI provider uses /v1/chat/completions because Responses API requests
 // are converted to Chat Completions format via ResponsesToChatConverter.
-// The endpoint includes /v1 prefix, so base URLs should not include it.
+// The endpoint URL is directly provided in the Endpoints map.
 func TestResponsesHandler_UpstreamURL(t *testing.T) {
 	tests := []struct {
 		name         string
 		providerType string
-		baseURL      string
+		endpointURL  string
 		wantURL      string
 	}{
 		{
-			name:         "OpenAI provider uses /v1/chat/completions",
+			name:         "OpenAI provider returns openai endpoint",
 			providerType: "openai",
-			baseURL:      "https://api.openai.com",
+			endpointURL:  "https://api.openai.com/v1/chat/completions",
 			wantURL:      "https://api.openai.com/v1/chat/completions",
 		},
 		{
-			name:         "OpenAI provider with trailing slash",
-			providerType: "openai",
-			baseURL:      "https://api.openai.com/",
-			wantURL:      "https://api.openai.com/v1/chat/completions",
-		},
-		{
-			name:         "OpenAI provider with full chat completions path",
-			providerType: "openai",
-			baseURL:      "https://api.openai.com/v1/chat/completions",
-			wantURL:      "https://api.openai.com/v1/chat/completions",
-		},
-		{
-			name:         "Anthropic provider uses /v1/messages",
+			name:         "Anthropic provider returns anthropic endpoint",
 			providerType: "anthropic",
-			baseURL:      "https://api.anthropic.com",
+			endpointURL:  "https://api.anthropic.com/v1/messages",
 			wantURL:      "https://api.anthropic.com/v1/messages",
 		},
 		{
-			name:         "Anthropic provider with existing /v1/messages",
-			providerType: "anthropic",
-			baseURL:      "https://api.anthropic.com/v1/messages",
-			wantURL:      "https://api.anthropic.com/v1/messages",
-		},
-		{
-			name:         "Anthropic provider with trailing slash",
-			providerType: "anthropic",
-			baseURL:      "https://api.minimax.io/anthropic/",
-			wantURL:      "https://api.minimax.io/anthropic/v1/messages",
+			name:         "Custom endpoint URL",
+			providerType: "openai",
+			endpointURL:  "https://custom.api.com/chat",
+			wantURL:      "https://custom.api.com/chat",
 		},
 	}
 
@@ -269,9 +256,9 @@ func TestResponsesHandler_UpstreamURL(t *testing.T) {
 				cfg: &config.Config{},
 				route: &router.ResolvedRoute{
 					Provider: config.Provider{
-						Type:    tt.providerType,
-						BaseURL: tt.baseURL,
+						Endpoints: map[string]string{tt.providerType: tt.endpointURL},
 					},
+					OutputProtocol: tt.providerType,
 				},
 			}
 
@@ -339,8 +326,9 @@ func TestResponsesHandler_ForwardHeaders_OpenAI(t *testing.T) {
 		cfg: &config.Config{},
 		route: &router.ResolvedRoute{
 			Provider: config.Provider{
-				Type: "openai",
+				Endpoints: map[string]string{"openai": "https://api.example.com"},
 			},
+			OutputProtocol: "openai",
 		},
 	}
 
@@ -371,8 +359,9 @@ func TestResponsesHandler_ForwardHeaders_Anthropic(t *testing.T) {
 		cfg: &config.Config{},
 		route: &router.ResolvedRoute{
 			Provider: config.Provider{
-				Type: "anthropic",
+				Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"},
 			},
+			OutputProtocol: "anthropic",
 		},
 	}
 
@@ -407,7 +396,7 @@ func TestResponsesHandler_CreateTransformer_OpenAI(t *testing.T) {
 		cfg: &config.Config{},
 		route: &router.ResolvedRoute{
 			Provider: config.Provider{
-				Type: "openai",
+				Endpoints: map[string]string{"openai": "https://api.example.com"},
 			},
 		},
 	}
@@ -426,7 +415,7 @@ func TestResponsesHandler_CreateTransformer_Anthropic(t *testing.T) {
 		cfg: &config.Config{},
 		route: &router.ResolvedRoute{
 			Provider: config.Provider{
-				Type: "anthropic",
+				Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"},
 			},
 		},
 	}
@@ -490,12 +479,11 @@ func TestNewResponsesHandler(t *testing.T) {
 	mockR := newMockRouter()
 	mockR.models["gpt-4o"] = &router.ResolvedRoute{
 		Provider: config.Provider{
-			Name:    "openai",
-			Type:    "openai",
-			BaseURL: "https://api.openai.com/v1",
-			APIKey:  "test-key",
+			Name:      "openai",
+			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
 		},
-		Model: "gpt-4o",
+		Model:          "gpt-4o",
+		OutputProtocol: "openai",
 	}
 
 	handler := NewResponsesHandler(cfg, mockR)
@@ -505,197 +493,16 @@ func TestNewResponsesHandler(t *testing.T) {
 	}
 }
 
-// TestResponsesHandlerNoRouter_ValidateRequest tests validation without router.
-func TestResponsesHandlerNoRouter_ValidateRequest(t *testing.T) {
-	handler := &ResponsesHandlerNoRouter{
-		cfg: &config.Config{},
-	}
-
-	tests := []struct {
-		name      string
-		body      string
-		wantError bool
-	}{
-		{
-			name:      "valid request",
-			body:      `{"model":"gpt-4o","input":"Hello","stream":true}`,
-			wantError: false,
-		},
-		{
-			name:      "invalid JSON",
-			body:      `not valid json`,
-			wantError: true,
-		},
-		{
-			name:      "empty model",
-			body:      `{"model":"","input":"Hello"}`,
-			wantError: true,
-		},
-		{
-			name:      "missing model field",
-			body:      `{"input":"Hello"}`,
-			wantError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := handler.ValidateRequest([]byte(tt.body))
-
-			if tt.wantError && err == nil {
-				t.Error("Expected error but got nil")
-			}
-			if !tt.wantError && err != nil {
-				t.Errorf("Expected no error but got: %v", err)
-			}
-		})
-	}
-}
-
-// TestResponsesHandlerNoRouter_TransformRequest tests transformation without router.
-func TestResponsesHandlerNoRouter_TransformRequest(t *testing.T) {
-	tests := []struct {
-		name         string
-		providers    []config.Provider
-		wantChat     bool // true if should produce ChatCompletionRequest
-		wantMessages bool // true if should produce MessageRequest
-	}{
-		{
-			name: "Anthropic provider",
-			providers: []config.Provider{
-				{
-					Name:    "anthropic",
-					Type:    "anthropic",
-					BaseURL: "https://api.anthropic.com/v1/messages",
-				},
-			},
-			wantMessages: true,
-		},
-		{
-			name: "OpenAI provider",
-			providers: []config.Provider{
-				{
-					Name:    "openai",
-					Type:    "openai",
-					BaseURL: "https://api.openai.com/v1",
-				},
-			},
-			wantChat: true,
-		},
-		{
-			name: "Anthropic takes precedence",
-			providers: []config.Provider{
-				{
-					Name:    "anthropic",
-					Type:    "anthropic",
-					BaseURL: "https://api.anthropic.com/v1/messages",
-				},
-				{
-					Name:    "openai",
-					Type:    "openai",
-					BaseURL: "https://api.openai.com/v1",
-				},
-			},
-			wantMessages: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{
-				AppConfig: &config.Schema{
-					Providers: tt.providers,
-				},
-			}
-			handler := &ResponsesHandlerNoRouter{cfg: cfg}
-
-			body := []byte(`{"model":"test","input":"Hello","stream":true}`)
-			transformed, err := handler.TransformRequest(body)
-
-			if err != nil {
-				t.Fatalf("TransformRequest failed: %v", err)
-			}
-
-			if tt.wantChat {
-				var chatReq types.ChatCompletionRequest
-				if err := json.Unmarshal(transformed, &chatReq); err != nil {
-					t.Errorf("Expected ChatCompletionRequest, got: %s", string(transformed))
-				}
-			}
-
-			if tt.wantMessages {
-				var msgReq types.MessageRequest
-				if err := json.Unmarshal(transformed, &msgReq); err != nil {
-					t.Errorf("Expected MessageRequest, got: %s", string(transformed))
-				}
-			}
-		})
-	}
-}
-
-// TestResponsesHandlerNoRouter_UpstreamURL tests URL generation without router.
-func TestResponsesHandlerNoRouter_UpstreamURL(t *testing.T) {
-	tests := []struct {
-		name      string
-		providers []config.Provider
-		wantURL   string
-	}{
-		{
-			name: "Anthropic provider",
-			providers: []config.Provider{
-				{
-					Name:    "anthropic",
-					Type:    "anthropic",
-					BaseURL: "https://api.anthropic.com/v1/messages",
-				},
-			},
-			wantURL: "https://api.anthropic.com/v1/messages",
-		},
-		{
-			name: "OpenAI provider",
-			providers: []config.Provider{
-				{
-					Name:    "openai",
-					Type:    "openai",
-					BaseURL: "https://api.openai.com/v1",
-				},
-			},
-			wantURL: "https://api.openai.com/v1/chat/completions",
-		},
-		{
-			name:      "No providers",
-			providers: []config.Provider{},
-			wantURL:   "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &config.Config{
-				AppConfig: &config.Schema{
-					Providers: tt.providers,
-				},
-			}
-			handler := &ResponsesHandlerNoRouter{cfg: cfg}
-
-			got := handler.UpstreamURL()
-			if got != tt.wantURL {
-				t.Errorf("UpstreamURL() = %s, want %s", got, tt.wantURL)
-			}
-		})
-	}
-}
-
 // BenchmarkResponsesHandler_TransformRequest_OpenAI benchmarks OpenAI transformation.
 func BenchmarkResponsesHandler_TransformRequest_OpenAI(b *testing.B) {
 	mockR := newMockRouter()
 	mockR.models["gpt-4o"] = &router.ResolvedRoute{
 		Provider: config.Provider{
-			Name:    "openai",
-			Type:    "openai",
-			BaseURL: "https://api.openai.com/v1",
+			Name:      "openai",
+			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
 		},
-		Model: "gpt-4o",
+		Model:          "gpt-4o",
+		OutputProtocol: "openai",
 	}
 
 	handler := &ResponsesHandler{
@@ -720,9 +527,8 @@ func BenchmarkResponsesHandler_TransformRequest_Anthropic(b *testing.B) {
 	mockR := newMockRouter()
 	mockR.models["claude-3-opus"] = &router.ResolvedRoute{
 		Provider: config.Provider{
-			Name:    "anthropic",
-			Type:    "anthropic",
-			BaseURL: "https://api.anthropic.com/v1/messages",
+			Name:      "anthropic",
+			Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
 		},
 		Model: "claude-3-opus-20240229",
 	}

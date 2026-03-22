@@ -83,8 +83,9 @@ func (h *MessagesHandler) ValidateRequest(body []byte) error {
 		return nil // Let upstream handle missing model
 	}
 
-	// Resolve the model to a route
-	route, err := h.modelRouter.Resolve(req.Model)
+	// Resolve the model to a route with incoming protocol context
+	// The messages endpoint receives requests in Anthropic format
+	route, err := h.modelRouter.ResolveWithProtocol(req.Model, "anthropic")
 	if err != nil {
 		return nil // Use fallback behavior
 	}
@@ -118,15 +119,33 @@ func (h *MessagesHandler) TransformRequest(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to marshal updated request: %w", err)
 	}
 
-	switch h.route.Provider.Type {
+	// Passthrough optimization - no transformation needed
+	if h.route.IsPassthrough {
+		return updatedBody, nil
+	}
+
+	switch h.route.OutputProtocol {
 	case "openai":
 		// Convert Anthropic MessageRequest to OpenAI ChatCompletionRequest
-		return transformAnthropicToChat(updatedBody)
+		transformed, err := transformAnthropicToChat(updatedBody)
+		if err != nil {
+			return nil, err
+		}
+
+		// Inject reasoning_split if configured
+		if h.route.ReasoningSplit {
+			var req map[string]interface{}
+			if err := json.Unmarshal(transformed, &req); err == nil {
+				req["reasoning_split"] = true
+				transformed, _ = json.Marshal(req)
+			}
+		}
+		return transformed, nil
 	case "anthropic":
 		// Pass through without transformation
 		return updatedBody, nil
 	default:
-		// Unknown provider type - pass through as-is
+		// Unknown protocol - pass through as-is
 		return updatedBody, nil
 	}
 }
@@ -136,10 +155,9 @@ func (h *MessagesHandler) TransformRequest(body []byte) ([]byte, error) {
 // @return URL string for the upstream API endpoint.
 func (h *MessagesHandler) UpstreamURL() string {
 	if h.route != nil {
-		return h.route.Provider.GetUpstreamURL("/v1/messages")
+		return h.route.Provider.GetEndpoint(h.route.OutputProtocol)
 	}
-	// Legacy behavior - use Anthropic upstream
-	return h.cfg.GetAnthropicUpstreamURL()
+	return ""
 }
 
 // ResolveAPIKey returns the API key for the resolved provider.
@@ -150,8 +168,7 @@ func (h *MessagesHandler) ResolveAPIKey(c *gin.Context) string {
 	if h.route != nil {
 		return h.route.Provider.GetAPIKey()
 	}
-	// Legacy behavior
-	return h.cfg.GetAnthropicAPIKey()
+	return ""
 }
 
 // ForwardHeaders copies headers to the upstream request based on provider type.
@@ -161,12 +178,12 @@ func (h *MessagesHandler) ResolveAPIKey(c *gin.Context) string {
 // @param c - Gin context containing the original request headers.
 // @param req - Upstream request to receive forwarded headers.
 func (h *MessagesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
-	providerType := "anthropic" // default
+	outputProtocol := "anthropic" // default
 	if h.route != nil {
-		providerType = h.route.Provider.Type
+		outputProtocol = h.route.OutputProtocol
 	}
 
-	switch providerType {
+	switch outputProtocol {
 	case "openai":
 		// Forward custom headers that may be used by OpenAI-compatible upstream
 		for k, v := range c.Request.Header {
@@ -205,7 +222,12 @@ func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransforme
 		return toolcall.NewAnthropicTransformer(w)
 	}
 
-	switch h.route.Provider.Type {
+	// Passthrough: no transformation needed
+	if h.route.IsPassthrough && !h.route.ToolCallTransform {
+		return transform.NewPassthroughTransformer(w)
+	}
+
+	switch h.route.OutputProtocol {
 	case "openai":
 		// Convert OpenAI Chat responses back to Anthropic format
 		logging.InfoMsg("Using ChatToAnthropicTransformer for OpenAI upstream (model=%s)", h.route.Model)

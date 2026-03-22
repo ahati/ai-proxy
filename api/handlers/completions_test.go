@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"ai-proxy/config"
@@ -88,18 +87,16 @@ func TestCompletionsHandler_TransformRequest(t *testing.T) {
 }
 
 func TestCompletionsHandler_UpstreamURL(t *testing.T) {
-	cfg := &config.Config{
-		AppConfig: &config.Schema{
-			Providers: []config.Provider{
-				{
-					Name:    "openai",
-					Type:    "openai",
-					BaseURL: "https://api.example.com/v1/chat/completions",
-				},
-			},
+	provider := config.Provider{
+		Name:      "openai",
+		Endpoints: map[string]string{"openai": "https://api.example.com/v1/chat/completions"},
+	}
+	h := &CompletionsHandler{
+		route: &router.ResolvedRoute{
+			Provider:       provider,
+			OutputProtocol: "openai",
 		},
 	}
-	h := &CompletionsHandler{cfg: cfg}
 
 	expectedURL := "https://api.example.com/v1/chat/completions"
 	if got := h.UpstreamURL(); got != expectedURL {
@@ -109,40 +106,38 @@ func TestCompletionsHandler_UpstreamURL(t *testing.T) {
 
 func TestCompletionsHandler_UpstreamURL_AnthropicProvider(t *testing.T) {
 	tests := []struct {
-		name         string
-		provider     config.Provider
-		routeModel   string
-		wantEndpoint string
+		name       string
+		provider   config.Provider
+		routeModel string
+		wantURL    string
 	}{
 		{
-			name: "OpenAI provider uses /chat/completions",
+			name: "OpenAI provider returns openai endpoint",
 			provider: config.Provider{
-				Name:    "openai",
-				Type:    "openai",
-				BaseURL: "https://api.openai.com/v1",
+				Name:      "openai",
+				Endpoints: map[string]string{"openai": "https://api.openai.com/v1/chat/completions"},
 			},
-			routeModel:   "gpt-4",
-			wantEndpoint: "/chat/completions",
+			routeModel: "gpt-4",
+			wantURL:    "https://api.openai.com/v1/chat/completions",
 		},
 		{
-			name: "Anthropic provider uses /v1/messages",
+			name: "Anthropic provider returns anthropic endpoint",
 			provider: config.Provider{
-				Name:    "anthropic",
-				Type:    "anthropic",
-				BaseURL: "https://api.anthropic.com",
+				Name:      "anthropic",
+				Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
 			},
-			routeModel:   "claude-3-opus",
-			wantEndpoint: "/v1/messages",
+			routeModel: "claude-3-opus",
+			wantURL:    "https://api.anthropic.com/v1/messages",
 		},
 		{
-			name: "Anthropic provider with existing /v1/messages in base URL",
+			name: "Multi-protocol provider with openai output",
 			provider: config.Provider{
-				Name:    "anthropic",
-				Type:    "anthropic",
-				BaseURL: "https://api.anthropic.com/v1/messages",
+				Name:      "multi",
+				Endpoints: map[string]string{"openai": "https://api.example.com/v1/chat/completions", "anthropic": "https://api.example.com/v1/messages"},
+				Default:   "openai",
 			},
-			routeModel:   "claude-3-opus",
-			wantEndpoint: "/v1/messages",
+			routeModel: "model",
+			wantURL:    "https://api.example.com/v1/chat/completions",
 		},
 	}
 
@@ -150,32 +145,32 @@ func TestCompletionsHandler_UpstreamURL_AnthropicProvider(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h := &CompletionsHandler{
 				route: &router.ResolvedRoute{
-					Provider: tt.provider,
-					Model:    tt.routeModel,
+					Provider:       tt.provider,
+					Model:          tt.routeModel,
+					OutputProtocol: tt.provider.GetDefaultProtocol(),
 				},
 			}
 
 			got := h.UpstreamURL()
-			if !strings.HasSuffix(got, tt.wantEndpoint) {
-				t.Errorf("UpstreamURL() = %v, want endpoint %v", got, tt.wantEndpoint)
+			if got != tt.wantURL {
+				t.Errorf("UpstreamURL() = %v, want %v", got, tt.wantURL)
 			}
 		})
 	}
 }
 
 func TestCompletionsHandler_ResolveAPIKey(t *testing.T) {
-	cfg := &config.Config{
-		AppConfig: &config.Schema{
-			Providers: []config.Provider{
-				{
-					Name:   "openai",
-					Type:   "openai",
-					APIKey: "test-api-key",
-				},
-			},
+	provider := config.Provider{
+		Name:      "openai",
+		Endpoints: map[string]string{"openai": "https://api.example.com/v1"},
+		APIKey:    "test-api-key",
+	}
+	h := &CompletionsHandler{
+		route: &router.ResolvedRoute{
+			Provider:       provider,
+			OutputProtocol: "openai",
 		},
 	}
-	h := &CompletionsHandler{cfg: cfg}
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
