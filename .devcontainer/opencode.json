@@ -1,5 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "share": "disabled",
+  "experimental": {
+    "openTelemetry": false
+  },
   "provider": {
     "proxy-ai": {
       "id": "proxy-ai",
@@ -7,48 +12,6 @@
       "api": "http://host.docker.internal:8080/v1",
       "name": "proxy",
       "models": {
-        "Kimi-K2.5-TEE": {
-          "id": "moonshotai/Kimi-K2.5-TEE",
-          "name": "Kimi-K2.5-TEE",
-          "family": "kimi",
-          "attachment": false,
-          "reasoning": true,
-          "tool_call": true,
-          "interleaved": {
-            "field": "reasoning_content"
-          },
-          "structured_output": true,
-          "temperature": false,
-          "knowledge": "2025-01",
-          "release_date": "2026-01",
-          "last_updated": "2026-01",
-          "modalities": {
-            "input": [
-              "text",
-              "image",
-              "video"
-            ],
-            "output": [
-              "text"
-            ]
-          },
-          "open_weights": true,
-          "cost": {
-            "input": 0.6,
-            "output": 3,
-            "cache_read": 0.1
-          },
-          "limit": {
-            "context": 262144,
-            "output": 262144
-          },
-          "options": {
-            "thinking": {
-              "type": "enabled",
-              "budgetTokens": 81920
-            }
-          }
-        },
         "glm-5": {
           "id": "glm-5",
           "name": "GLM-5",

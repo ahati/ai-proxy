@@ -1094,3 +1094,29 @@ func (t *ResponsesTransformer) Flush() error {
 func (t *ResponsesTransformer) Close() error {
 	return t.Flush()
 }
+
+// EmitError sends a response.failed event for stream errors.
+// This notifies clients when the stream terminates unexpectedly.
+func (t *ResponsesTransformer) EmitError(streamErr error) error {
+	if t.responseID == "" {
+		return nil
+	}
+
+	event := map[string]interface{}{
+		"type":            "response.failed",
+		"sequence_number": t.outputIndex,
+		"response": map[string]interface{}{
+			"id":         t.responseID,
+			"object":     "response",
+			"model":      t.model,
+			"status":     "failed",
+			"error": map[string]interface{}{
+				"message": streamErr.Error(),
+				"type":    "stream_error",
+			},
+		},
+	}
+
+	data, _ := json.Marshal(event)
+	return t.sseWriter.WriteData(data)
+}

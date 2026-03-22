@@ -1064,3 +1064,29 @@ func (t *ChatToResponsesTransformer) Close() error {
 
 	return t.Flush()
 }
+
+// EmitError sends a response.failed event for stream errors.
+// This notifies clients when the stream terminates unexpectedly.
+func (t *ChatToResponsesTransformer) EmitError(streamErr error) error {
+	if t.completed || t.responseID == "" {
+		return nil
+	}
+
+	event := map[string]interface{}{
+		"type":            "response.failed",
+		"sequence_number": t.nextSeq(),
+		"response": map[string]interface{}{
+			"id":         t.responseID,
+			"object":     "response",
+			"created_at": t.created,
+			"model":      t.model,
+			"status":     "failed",
+			"error": map[string]interface{}{
+				"message": streamErr.Error(),
+				"type":    "stream_error",
+			},
+		},
+	}
+
+	return t.writeEvent(event)
+}
