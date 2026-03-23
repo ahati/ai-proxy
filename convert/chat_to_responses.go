@@ -66,9 +66,10 @@ func TransformChatToResponses(body []byte) ([]byte, error) {
 // Dropped: n, stop, response_format, frequency_penalty, presence_penalty,
 // logprobs, seed — none have Responses API equivalents.
 func ChatToResponsesRequest(req *types.ChatCompletionRequest) (*types.ResponsesRequest, error) {
+	stream := req.Stream
 	out := &types.ResponsesRequest{
 		Model:       req.Model,
-		Stream:      req.Stream,
+		Stream:      &stream,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		ToolChoice:  ChatToolChoiceToResponses(marshalToolChoiceFromRequest(req.ToolChoice)),

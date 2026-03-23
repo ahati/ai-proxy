@@ -1629,7 +1629,7 @@ func TestTransformChatToResponses(t *testing.T) {
 				if err := json.Unmarshal(output, &req); err != nil {
 					t.Fatalf("Failed to parse output: %v", err)
 				}
-				if !req.Stream {
+				if req.Stream == nil || !*req.Stream {
 					t.Error("Expected stream to be true")
 				}
 			},

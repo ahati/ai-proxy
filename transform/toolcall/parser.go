@@ -395,6 +395,29 @@ func (p *Parser) processReadingID() []Event {
 	// "<id>:<function_name>" or just "<function_name>"
 	rawID := strings.TrimSpace(p.buf[:argIdx])
 	id, name := p.parseToolCallID(rawID)
+
+	// If validation failed (empty ID/name), this is not a valid tool call.
+	// Emit the entire tool call section as regular content.
+	if id == "" || name == "" {
+		// Find the end of this tool call to emit everything as content
+		// Search in the remaining buffer after ArgBegin position
+		remainingBuf := p.buf[argIdx+len(p.tokens.ArgBegin):]
+		endIdx := strings.Index(remainingBuf, p.tokens.CallEnd)
+		if endIdx < 0 {
+			// CallEnd not found yet - emit what we have and wait for more
+			content := p.buf
+			p.buf = ""
+			return []Event{{Type: EventContent, Text: content}}
+		}
+		// Emit everything including markers as content
+		totalLen := argIdx + len(p.tokens.ArgBegin) + endIdx + len(p.tokens.CallEnd)
+		content := p.buf[:totalLen]
+		p.buf = p.buf[totalLen:]
+		// Go back to inSection state to look for more tool calls or section end
+		p.state = stateInSection
+		return []Event{{Type: EventContent, Text: content}}
+	}
+
 	// Remove processed content and ArgBegin from buffer.
 	p.buf = p.buf[argIdx+len(p.tokens.ArgBegin):]
 	// Transition to reading arguments state.
@@ -534,6 +557,12 @@ func (p *Parser) endSection(endIdx int) []Event {
 //	The timestamp component ensures IDs are unique even across sessions.
 func (p *Parser) parseToolCallID(raw string) (string, string) {
 	raw = strings.TrimSpace(raw)
+
+	// Validate that this looks like a tool call, not random text.
+	if !p.isValidToolCallID(raw) {
+		return "", ""
+	}
+
 	name := p.extractFunctionName(raw)
 	// Check for standard ID prefixes from the LLM.
 	if strings.HasPrefix(raw, "call_") || strings.HasPrefix(raw, "toolu_") {
@@ -544,6 +573,32 @@ func (p *Parser) parseToolCallID(raw string) (string, string) {
 	// This ensures uniqueness within and across sessions.
 	id := fmt.Sprintf("call_%d_%d", p.toolIndex, time.Now().UnixMilli())
 	return id, name
+}
+
+// isValidToolCallID checks if the raw text looks like a valid tool call ID/name.
+// Real tool calls have short, single-line identifiers without special formatting.
+func (p *Parser) isValidToolCallID(raw string) bool {
+	// Reject if empty
+	if raw == "" {
+		return false
+	}
+
+	// Reject if very long (real tool call IDs are typically < 100 chars)
+	if len(raw) > 200 {
+		return false
+	}
+
+	// Reject if contains newlines (tool call IDs are single-line)
+	if strings.Contains(raw, "\n") {
+		return false
+	}
+
+	// Reject if looks like formatted text (contains markdown or code blocks)
+	if strings.Contains(raw, "```") || strings.Contains(raw, "**") {
+		return false
+	}
+
+	return true
 }
 
 // extractFunctionName parses the function name from raw tool call ID text.
