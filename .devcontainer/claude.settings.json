@@ -45,5 +45,6 @@
   "showThinkingSummaries": true,
   "skipDangerousModePermissionPrompt": true,
   "terminalProgressBarEnabled": false,
-  "defaultMode": "bypassPermissions"
+  "defaultMode": "bypassPermissions",
+  "model": "opus"
 }

@@ -305,7 +305,7 @@ func NewChatToResponsesTransformer(w io.Writer) *ChatToResponsesTransformer {
 		created:        time.Now().Unix(),
 		sequenceNumber: 0,
 		parser:         toolcall.NewParser(toolcall.DefaultTokens),
-		glm5Parser:    toolcall.NewGLM5Parser(),
+		glm5Parser:     toolcall.NewGLM5Parser(),
 	}
 }
 
