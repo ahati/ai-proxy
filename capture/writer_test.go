@@ -398,9 +398,9 @@ func TestExtractTokenUsageFromChunks(t *testing.T) {
 			chunks: []SSEChunk{
 				{Data: json.RawMessage(`{"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":40}}}`)},
 			},
-			wantInput: 100,
+			wantInput:  100,
 			wantOutput: 20,
-			wantCache: 40,
+			wantCache:  40,
 		},
 		{
 			name: "chunk with raw data only",
@@ -518,6 +518,20 @@ func TestExtractFinishReasonFromChunks(t *testing.T) {
 			want: "length",
 		},
 		{
+			name: "Responses API event response.status completed",
+			chunks: []SSEChunk{
+				{Data: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_123","status":"completed"}}`)},
+			},
+			want: "stop",
+		},
+		{
+			name: "Responses API event response.status incomplete",
+			chunks: []SSEChunk{
+				{Data: json.RawMessage(`{"type":"response.completed","response":{"id":"resp_123","status":"incomplete"}}`)},
+			},
+			want: "length",
+		},
+		{
 			name: "Multiple chunks - last one wins",
 			chunks: []SSEChunk{
 				{Data: json.RawMessage(`{"choices":[{"finish_reason":"length"}]}`)},
@@ -526,9 +540,9 @@ func TestExtractFinishReasonFromChunks(t *testing.T) {
 			want: "stop",
 		},
 		{
-			name: "Empty chunks",
+			name:   "Empty chunks",
 			chunks: []SSEChunk{},
-			want: "unknown",
+			want:   "unknown",
 		},
 		{
 			name: "No finish reason",

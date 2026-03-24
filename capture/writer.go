@@ -423,7 +423,7 @@ func extractFinishReasonFromJSON(data json.RawMessage) string {
 		return sr
 	}
 
-	// Check for Responses API format: status
+	// Check for Responses API format: status at root level
 	if status, ok := root["status"].(string); ok && status != "" {
 		// Map Responses API status to finish reason
 		switch status {
@@ -433,6 +433,20 @@ func extractFinishReasonFromJSON(data json.RawMessage) string {
 			return "length"
 		default:
 			return status
+		}
+	}
+
+	// Check for Responses API event format: response.status (nested in events like response.completed)
+	if resp, ok := root["response"].(map[string]interface{}); ok {
+		if status, ok := resp["status"].(string); ok && status != "" {
+			switch status {
+			case "completed":
+				return "stop"
+			case "incomplete":
+				return "length"
+			default:
+				return status
+			}
 		}
 	}
 
