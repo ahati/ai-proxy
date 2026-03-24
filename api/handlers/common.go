@@ -546,13 +546,14 @@ func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.Ca
 	// Compact one-line log with emojis:
 	// 📤 = upstream (to LLM), 📥 = downstream (to client)
 	// ⬆️ = input tokens, ⬇️ = output tokens, 💾 = cache tokens
-	logging.InfoMsg("📤 ⬆️%d ⬇️%d 💾%d   📥 ⬆️%d ⬇️%d 💾%d [%s]",
+	logging.InfoMsg("|📤 ⬆️ %d ⬇️ %d 💾 %d|  |📥 ⬆️ %d ⬇️ %d 💾 %d| [%s] [%s]",
 		upstreamUsage.InputTokens,
 		upstreamUsage.OutputTokens,
 		upstreamUsage.CacheReadTokens+upstreamUsage.CacheCreationTokens,
 		downstreamUsage.InputTokens,
 		downstreamUsage.OutputTokens,
 		downstreamUsage.CacheReadTokens+downstreamUsage.CacheCreationTokens,
+		cc.SessionID,
 		cc.RequestID,
 	)
 }

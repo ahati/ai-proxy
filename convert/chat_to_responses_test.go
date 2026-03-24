@@ -1017,7 +1017,7 @@ func TestChatToResponsesTransformer_ToolCallsInReasoning(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			transformer := NewChatToResponsesTransformer(&buf)
-			transformer.SetToolCallTransform(tt.toolCallTransform)
+			transformer.SetKimiToolCallTransform(tt.toolCallTransform)
 
 			for _, chunk := range tt.chunks {
 				data, _ := json.Marshal(chunk)
