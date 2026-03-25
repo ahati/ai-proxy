@@ -44,6 +44,9 @@ type ResponsesRequest struct {
 	// Default is true. When false, enables ZDR (Zero Data Retention) mode.
 	// Use pointer to distinguish between "not specified" (nil, defaults to true) and "explicitly false".
 	Store *bool `json:"store,omitempty"`
+	// EncryptedReasoning is used in ZDR mode to pass encrypted reasoning blobs.
+	// When store:false, the client sends and receives encrypted reasoning blobs.
+	EncryptedReasoning string `json:"encrypted_reasoning,omitempty"`
 }
 
 // ReasoningConfig represents reasoning configuration for supported models.
@@ -188,6 +191,9 @@ type ResponsesResponse struct {
 	User string `json:"user,omitempty"`
 	// Metadata associated with the response.
 	Metadata map[string]string `json:"metadata,omitempty"`
+	// EncryptedReasoning is used in ZDR mode to pass encrypted reasoning blobs.
+	// When store:false, the response includes encrypted reasoning data.
+	EncryptedReasoning string `json:"encrypted_reasoning,omitempty"`
 }
 
 // ReasoningSummary contains reasoning summary if requested.
@@ -310,6 +316,7 @@ const (
 	EventResponseCompleted                  ResponsesEventType = "response.completed"
 	EventResponseFailed                     ResponsesEventType = "response.failed"
 	EventResponseIncomplete                 ResponsesEventType = "response.incomplete"
+	EventResponseCancelled                  ResponsesEventType = "response.cancelled"
 )
 
 // ResponsesStreamEvent represents a streaming event in the Responses API.

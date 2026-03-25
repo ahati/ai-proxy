@@ -22,7 +22,7 @@ func TestRegistry_Register(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stream := r.Register("test-id", cancel)
+	stream := r.Register("test-id", cancel, nil)
 
 	if stream == nil {
 		t.Fatal("Register() returned nil")
@@ -51,7 +51,7 @@ func TestRegistry_Cancel(t *testing.T) {
 	r := NewRegistry()
 	ctx, cancel := context.WithCancel(context.Background())
 
-	r.Register("test-id", cancel)
+	r.Register("test-id", cancel, nil)
 
 	// Verify context is not cancelled before Cancel
 	select {
@@ -95,7 +95,7 @@ func TestRegistry_Remove(t *testing.T) {
 	_, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	r.Register("test-id", cancel)
+	r.Register("test-id", cancel, nil)
 	r.Remove("test-id")
 
 	retrieved := r.Get("test-id")
@@ -116,7 +116,7 @@ func TestRegistry_Get(t *testing.T) {
 	}
 
 	// Register and get
-	r.Register("test-id", cancel)
+	r.Register("test-id", cancel, nil)
 	retrieved = r.Get("test-id")
 	if retrieved == nil {
 		t.Fatal("Get() returned nil for registered stream")
@@ -140,8 +140,8 @@ func TestRegistry_List(t *testing.T) {
 	}
 
 	// Add streams
-	r.Register("id1", cancel1)
-	r.Register("id2", cancel2)
+	r.Register("id1", cancel1, nil)
+	r.Register("id2", cancel2, nil)
 
 	ids = r.List()
 	if len(ids) != 2 {
@@ -170,7 +170,7 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 			id := string(rune('a'+n%26)) + string(rune('a'+n/26))
 			_, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			r.Register(id, cancel)
+			r.Register(id, cancel, nil)
 		}(i)
 	}
 

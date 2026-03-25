@@ -164,6 +164,15 @@ type LocalSummarizerConfig struct {
 	MaxReasoningChars int `json:"max_reasoning_chars,omitempty"`
 }
 
+// ResponsesConfig defines configuration specific to the Responses API.
+// These settings control behavior when handling Responses API requests.
+type ResponsesConfig struct {
+	// MaxContextTokens limits the conversation history token count.
+	// If set, older turns are truncated to stay within this limit.
+	// Default: 0 (no limit)
+	MaxContextTokens int `json:"max_context_tokens"`
+}
+
 // Schema is the root configuration structure for the multi-provider proxy.
 // It contains all provider definitions, model mappings, and fallback settings.
 type Schema struct {
@@ -175,4 +184,6 @@ type Schema struct {
 	Fallback FallbackConfig `json:"fallback"`
 	// Summarizer defines the summarizer configuration.
 	Summarizer SummarizerConfig `json:"summarizer"`
+	// Responses defines Responses API specific configuration.
+	Responses ResponsesConfig `json:"responses"`
 }

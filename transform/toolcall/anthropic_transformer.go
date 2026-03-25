@@ -641,3 +641,15 @@ func (t *AnthropicTransformer) Flush() error {
 func (t *AnthropicTransformer) Close() error {
 	return t.Flush()
 }
+
+// Initialize is called before the upstream request to perform any setup.
+// For AnthropicTransformer, this is a no-op as initialization happens on first event.
+func (t *AnthropicTransformer) Initialize() error {
+	return nil
+}
+
+// HandleCancel handles cancellation requests.
+// For AnthropicTransformer, this is a no-op.
+func (t *AnthropicTransformer) HandleCancel() error {
+	return nil
+}

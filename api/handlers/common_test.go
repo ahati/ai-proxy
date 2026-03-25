@@ -419,6 +419,14 @@ func (m *mockTransformer) Close() error {
 	return nil
 }
 
+func (m *mockTransformer) Initialize() error {
+	return nil
+}
+
+func (m *mockTransformer) HandleCancel() error {
+	return nil
+}
+
 type fakeUpstreamClient struct {
 	buildReq func(ctx context.Context, body []byte) (*http.Request, error)
 	setHdrs  func(req *http.Request)

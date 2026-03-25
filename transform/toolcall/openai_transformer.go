@@ -194,3 +194,15 @@ func (t *OpenAITransformer) Flush() error {
 func (t *OpenAITransformer) Close() error {
 	return t.Flush()
 }
+
+// Initialize is called before the upstream request to perform any setup.
+// For OpenAITransformer, this is a no-op as initialization happens on first event.
+func (t *OpenAITransformer) Initialize() error {
+	return nil
+}
+
+// HandleCancel handles cancellation requests.
+// For OpenAITransformer, this is a no-op.
+func (t *OpenAITransformer) HandleCancel() error {
+	return nil
+}

@@ -19,6 +19,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// maxEncryptedReasoningSize is the maximum allowed size for encrypted_reasoning blob (1MB).
+// This prevents memory exhaustion attacks from excessively large blobs.
+const maxEncryptedReasoningSize = 1 * 1024 * 1024 // 1MB
+
 // ResponsesHandler handles OpenAI Responses API requests.
 // It can route to either OpenAI or Anthropic upstream based on model configuration.
 //
@@ -53,6 +57,9 @@ type ResponsesHandler struct {
 	// reasoningSummaryMode controls how reasoning is summarized.
 	// Values: "" (no summary), "concise", "detailed"
 	reasoningSummaryMode string
+	// encryptedReasoning stores the encrypted reasoning blob from the request.
+	// Used in ZDR mode when store:false and encrypted_reasoning is provided.
+	encryptedReasoning string
 }
 
 // NewResponsesHandler creates a Gin handler for the /v1/responses endpoint.
@@ -114,6 +121,15 @@ func (h *ResponsesHandler) ValidateRequest(body []byte) error {
 		h.reasoningSummaryMode = req.Reasoning.Summary
 	}
 
+	// Extract encrypted reasoning for ZDR mode
+	// This is passed through to transformers when store:false
+	h.encryptedReasoning = req.EncryptedReasoning
+
+	// Validate encrypted_reasoning size to prevent memory exhaustion attacks
+	if len(h.encryptedReasoning) > maxEncryptedReasoningSize {
+		return fmt.Errorf("encrypted_reasoning exceeds maximum size of %d bytes", maxEncryptedReasoningSize)
+	}
+
 	return nil
 }
 
@@ -151,6 +167,7 @@ func (h *ResponsesHandler) TransformRequest(ctx context.Context, body []byte) ([
 		// Convert ResponsesRequest to ChatCompletionRequest
 		converter := convert.NewResponsesToChatConverter()
 		converter.SetReasoningSplit(h.route.ReasoningSplit)
+		converter.SetStore(h.shouldStore)
 		result, err := converter.Convert(updatedBody)
 		if err == nil && converter.CacheHit() {
 			capture.SetCacheHit(ctx)
@@ -158,7 +175,7 @@ func (h *ResponsesHandler) TransformRequest(ctx context.Context, body []byte) ([
 		return result, err
 	case "anthropic":
 		// Convert ResponsesRequest to Anthropic MessageRequest
-		result, err := convert.TransformResponsesToAnthropicWithCache(updatedBody, ctx)
+		result, err := convert.TransformResponsesToAnthropicWithOptions(updatedBody, ctx, h.shouldStore)
 		return result, err
 	default:
 		// Unknown protocol - pass through as-is
@@ -243,6 +260,7 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 		t.SetStore(h.shouldStore)
 		t.SetPreviousResponseID(h.previousResponseID)
 		t.SetReasoningSummaryMode(h.reasoningSummaryMode)
+		t.SetEncryptedReasoning(h.encryptedReasoning)
 		return t
 	case "anthropic":
 		// ResponsesTransformer converts Anthropic SSE to Responses format
@@ -255,6 +273,7 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 		t.SetStore(h.shouldStore)
 		t.SetPreviousResponseID(h.previousResponseID)
 		t.SetReasoningSummaryMode(h.reasoningSummaryMode)
+		t.SetEncryptedReasoning(h.encryptedReasoning)
 		return t
 	default:
 		return transform.NewPassthroughTransformer(w)

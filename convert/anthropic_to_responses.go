@@ -661,3 +661,15 @@ func (t *AnthropicToResponsesTransformer) Close() error {
 	}
 	return nil
 }
+
+// Initialize prepares the transformer and emits initial events before upstream request.
+// For AnthropicToResponsesTransformer, this is a no-op as response.created is emitted on first event.
+func (t *AnthropicToResponsesTransformer) Initialize() error {
+	return nil
+}
+
+// HandleCancel handles cancellation requests.
+// For AnthropicToResponsesTransformer, this is a no-op.
+func (t *AnthropicToResponsesTransformer) HandleCancel() error {
+	return nil
+}

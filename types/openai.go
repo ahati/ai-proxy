@@ -94,6 +94,10 @@ type ChatCompletionRequest struct {
 	// Supported by providers that expose reasoning continuity (e.g., MiniMax).
 	ReasoningItemID string `json:"reasoning_item_id,omitempty"`
 
+	// EncryptedReasoning is used in ZDR mode to pass encrypted reasoning blobs.
+	// When store:false, the client sends and receives encrypted reasoning blobs.
+	EncryptedReasoning string `json:"encrypted_reasoning,omitempty"`
+
 	// Deprecated: System field is non-standard. Use a system message in Messages array instead.
 	// Kept for backwards compatibility with existing clients.
 	System string `json:"system,omitempty"`
@@ -206,6 +210,9 @@ type Chunk struct {
 	// Usage contains token usage statistics.
 	// Only present in the final chunk when stream_options.include_usage is true.
 	Usage *Usage `json:"usage,omitempty"`
+	// EncryptedReasoning is returned by upstream in ZDR mode when store:false.
+	// This contains an encrypted blob that can be passed back on subsequent turns.
+	EncryptedReasoning string `json:"encrypted_reasoning,omitempty"`
 }
 
 // Choice represents a single choice within a streaming chunk.

@@ -28,6 +28,15 @@ type Conversation struct {
 	// This is passed to the upstream LLM on continuation to enable
 	// reasoning continuity across turns.
 	ReasoningItemID string
+	// EncryptedReasoning stores the encrypted blob in ZDR mode.
+	// When store:false, this contains the encrypted reasoning data.
+	EncryptedReasoning string
+	// UserID is the owner of this conversation.
+	// Used for access control to prevent cross-user access.
+	UserID string
+	// OrgID is the organization ID for this conversation.
+	// Used for organization-level access control.
+	OrgID string
 	// CreatedAt is the timestamp when the conversation was created.
 	CreatedAt time.Time
 	// ExpiresAt is the timestamp when the conversation should be expired.
@@ -125,6 +134,117 @@ func (s *Store) WalkChain(id string) []*Conversation {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
 	return chain
+}
+
+// OwnershipError indicates that a conversation chain access was denied
+// due to ownership mismatch.
+type OwnershipError struct {
+	ResponseID string
+	UserID     string
+	ExpectedID string
+}
+
+func (e *OwnershipError) Error() string {
+	return "previous_response_id does not belong to user"
+}
+
+// WalkChainWithOwnership walks the conversation chain and validates ownership.
+// Returns OwnershipError if the root conversation belongs to a different user.
+// If userID is empty, ownership check is skipped (for backwards compatibility).
+func (s *Store) WalkChainWithOwnership(id string, userID string) ([]*Conversation, error) {
+	chain := s.WalkChain(id)
+	if len(chain) == 0 {
+		return nil, nil
+	}
+
+	// Skip ownership check if no userID provided (backwards compatibility)
+	if userID == "" {
+		return chain, nil
+	}
+
+	// Validate ownership of root conversation
+	root := chain[0]
+	if root.UserID != "" && root.UserID != userID {
+		return nil, &OwnershipError{
+			ResponseID: id,
+			UserID:     userID,
+			ExpectedID: root.UserID,
+		}
+	}
+
+	return chain, nil
+}
+
+// WalkChainOptions provides options for walking the conversation chain.
+type WalkChainOptions struct {
+	// MaxTokens is the maximum number of tokens to include in the chain.
+	// If 0, no limit is applied.
+	MaxTokens int
+}
+
+// WalkChainWithOptions walks the conversation chain with optional limits.
+// If MaxTokens is set, the chain is truncated to stay within the token budget,
+// dropping the oldest turns first.
+func (s *Store) WalkChainWithOptions(id string, opts WalkChainOptions) []*Conversation {
+	chain := s.WalkChain(id)
+	if opts.MaxTokens <= 0 || len(chain) == 0 {
+		return chain
+	}
+
+	// Count tokens and truncate from the beginning (oldest turns)
+	// Simple estimation: ~4 characters per token
+	totalTokens := 0
+	result := make([]*Conversation, 0, len(chain))
+
+	// Walk from newest to oldest, accumulate until we hit limit
+	for i := len(chain) - 1; i >= 0; i-- {
+		conv := chain[i]
+		convTokens := estimateConversationTokens(conv)
+		if totalTokens+convTokens > opts.MaxTokens {
+			break
+		}
+		totalTokens += convTokens
+		result = append(result, conv)
+	}
+
+	// Reverse to get chronological order
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+
+	return result
+}
+
+// estimateConversationTokens estimates the token count for a conversation.
+// Uses a simple heuristic of ~4 characters per token.
+func estimateConversationTokens(conv *Conversation) int {
+	chars := 0
+
+	// Count input content
+	for _, item := range conv.Input {
+		switch content := item.Content.(type) {
+		case string:
+			chars += len(content)
+		case []interface{}:
+			for _, part := range content {
+				if m, ok := part.(map[string]interface{}); ok {
+					if text, ok := m["text"].(string); ok {
+						chars += len(text)
+					}
+				}
+			}
+		}
+	}
+
+	// Count output content
+	for _, item := range conv.Output {
+		for _, content := range item.Content {
+			chars += len(content.Text)
+		}
+	}
+
+	// Simple estimation: ~4 characters per token
+	return chars / 4
 }
 
 // Store saves a conversation, evicting the oldest if at capacity.
@@ -251,6 +371,15 @@ func WalkChainFromDefault(id string) []*Conversation {
 	return DefaultStore.WalkChain(id)
 }
 
+// WalkChainFromDefaultWithOwnership walks the conversation chain with ownership validation.
+// Returns OwnershipError if the conversation belongs to a different user.
+func WalkChainFromDefaultWithOwnership(id string, userID string) ([]*Conversation, error) {
+	if DefaultStore == nil {
+		return nil, nil
+	}
+	return DefaultStore.WalkChainWithOwnership(id, userID)
+}
+
 // StoreInDefault saves a conversation to the default store.
 // Does nothing if the default store is not initialized.
 func StoreInDefault(conv *Conversation) {
@@ -258,4 +387,12 @@ func StoreInDefault(conv *Conversation) {
 		return
 	}
 	DefaultStore.Store(conv)
+}
+
+// WalkChainFromDefaultWithOptions walks the conversation chain with options.
+func WalkChainFromDefaultWithOptions(id string, opts WalkChainOptions) []*Conversation {
+	if DefaultStore == nil {
+		return nil
+	}
+	return DefaultStore.WalkChainWithOptions(id, opts)
 }

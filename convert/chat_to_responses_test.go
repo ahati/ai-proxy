@@ -689,6 +689,11 @@ func TestChatToResponsesTransformer_NoChunkID(t *testing.T) {
 	var buf bytes.Buffer
 	transformer := NewChatToResponsesTransformer(&buf)
 
+	// Initialize transformer to emit response.created before processing chunks
+	if err := transformer.Initialize(); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
 	for _, chunk := range chunks {
 		data, err := json.Marshal(chunk)
 		if err != nil {
@@ -1769,5 +1774,157 @@ func TestChatToResponsesConverter_Convert(t *testing.T) {
 	}
 	if req.MaxOutputTokens != 500 {
 		t.Errorf("Expected max_output_tokens 500, got %d", req.MaxOutputTokens)
+	}
+}
+
+// ============================================================================
+// Incomplete Response Tests (finish_reason:"length" mapping)
+// ============================================================================
+
+// TestChatToResponsesTransformer_FinishReasonLength tests that finish_reason:"length" produces response.incomplete.
+func TestChatToResponsesTransformer_FinishReasonLength(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewChatToResponsesTransformer(&buf)
+
+	finishReason := "length"
+	chunks := []types.Chunk{
+		{
+			ID:     "chatcmpl-123",
+			Object: "chat.completion.chunk",
+			Model:  "test-model",
+			Choices: []types.Choice{
+				{
+					Index: 0,
+					Delta: types.Delta{
+						Role:    "assistant",
+						Content: "Hello",
+					},
+				},
+			},
+		},
+		{
+			ID:      "chatcmpl-123",
+			Choices: []types.Choice{{Index: 0, FinishReason: &finishReason}},
+		},
+		{
+			ID:     "chatcmpl-123",
+			Object: "chat.completion.chunk",
+			Model:  "test-model",
+			Usage: &types.Usage{
+				PromptTokens:     100,
+				CompletionTokens: 50,
+				TotalTokens:      150,
+			},
+		},
+	}
+
+	for _, chunk := range chunks {
+		data, _ := json.Marshal(chunk)
+		event := &sse.Event{Data: string(data)}
+		if err := transformer.Transform(event); err != nil {
+			t.Fatalf("Transform failed: %v", err)
+		}
+	}
+
+	if err := transformer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should contain response.incomplete event
+	if !strings.Contains(output, `"type":"response.incomplete"`) {
+		t.Error("Result should contain response.incomplete event for finish_reason:length")
+	}
+
+	// Should have status: incomplete
+	if !strings.Contains(output, `"status":"incomplete"`) {
+		t.Error("Result should contain status: incomplete")
+	}
+
+	// Should have incomplete_details with reason
+	if !strings.Contains(output, `"incomplete_details"`) {
+		t.Error("Result should contain incomplete_details")
+	}
+
+	if !strings.Contains(output, `"reason":"max_output_tokens"`) {
+		t.Error("Result should contain reason: max_output_tokens")
+	}
+
+	// Should NOT contain response.completed
+	if strings.Contains(output, `"type":"response.completed"`) {
+		t.Error("Result should NOT contain response.completed for finish_reason:length")
+	}
+}
+
+// TestChatToResponsesTransformer_FinishReasonStop tests that finish_reason:"stop" produces response.completed.
+func TestChatToResponsesTransformer_FinishReasonStop(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewChatToResponsesTransformer(&buf)
+
+	finishReason := "stop"
+	chunks := []types.Chunk{
+		{
+			ID:     "chatcmpl-123",
+			Object: "chat.completion.chunk",
+			Model:  "test-model",
+			Choices: []types.Choice{
+				{
+					Index: 0,
+					Delta: types.Delta{
+						Role:    "assistant",
+						Content: "Hello",
+					},
+				},
+			},
+		},
+		{
+			ID:      "chatcmpl-123",
+			Choices: []types.Choice{{Index: 0, FinishReason: &finishReason}},
+		},
+		{
+			ID:     "chatcmpl-123",
+			Object: "chat.completion.chunk",
+			Model:  "test-model",
+			Usage: &types.Usage{
+				PromptTokens:     100,
+				CompletionTokens: 50,
+				TotalTokens:      150,
+			},
+		},
+	}
+
+	for _, chunk := range chunks {
+		data, _ := json.Marshal(chunk)
+		event := &sse.Event{Data: string(data)}
+		if err := transformer.Transform(event); err != nil {
+			t.Fatalf("Transform failed: %v", err)
+		}
+	}
+
+	if err := transformer.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	output := buf.String()
+
+	// Should contain response.completed event
+	if !strings.Contains(output, `"type":"response.completed"`) {
+		t.Error("Result should contain response.completed event for finish_reason:stop")
+	}
+
+	// Should have status: completed
+	if !strings.Contains(output, `"status":"completed"`) {
+		t.Error("Result should contain status: completed")
+	}
+
+	// Should NOT have incomplete_details
+	if strings.Contains(output, `"incomplete_details"`) {
+		t.Error("Result should NOT contain incomplete_details for normal completion")
+	}
+
+	// Should NOT contain response.incomplete
+	if strings.Contains(output, `"type":"response.incomplete"`) {
+		t.Error("Result should NOT contain response.incomplete for finish_reason:stop")
 	}
 }

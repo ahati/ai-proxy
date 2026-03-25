@@ -10,6 +10,12 @@ import (
 	"github.com/tmaxmax/go-sse"
 )
 
+// ResponseIDGetter is an optional interface for transformers that can provide
+// their response ID. This is used for stream cancellation registration.
+type ResponseIDGetter interface {
+	GetResponseID() string
+}
+
 // SSETransformer defines the interface for transforming server-sent events.
 // Implementations process SSE events and write transformed output.
 //
@@ -20,13 +26,41 @@ import (
 //	across multiple requests. Each request should use its own transformer
 //	instance unless explicitly documented as thread-safe.
 //
-// @note The transformation pipeline follows: Transform (multiple calls) -> Flush -> Close.
+// @note The transformation pipeline follows: Initialize -> Transform (multiple calls) -> Flush -> Close.
 //
 //	Callers must ensure Close() is called to release resources.
 //
 // @pre The output writer must be properly initialized before creating implementations.
 // @post After Close(), the transformer must not be used for further transformations.
 type SSETransformer interface {
+	// Initialize prepares the transformer and emits initial events before upstream request.
+	//
+	// @brief Initializes the transformer and emits response.created before upstream call.
+	//
+	// @return error Returns nil on success.
+	//               Returns error if initial event emission fails.
+	//
+	// @pre The transformer must not be initialized yet.
+	// @post Initial events (response.created, response.in_progress) are emitted.
+	//
+	// @note Must be called BEFORE making the upstream API request to ensure
+	//       response.created is sent before any upstream response arrives.
+	Initialize() error
+
+	// HandleCancel processes a cancellation request and emits response.cancelled.
+	//
+	// @brief Handles cancellation by flushing buffered content and emitting cancelled event.
+	//
+	// @return error Returns nil on success.
+	//               Returns error if event emission fails.
+	//
+	// @pre The transformer must be initialized.
+	// @post Buffered content is flushed and response.cancelled is emitted.
+	//
+	// @note Must be called when the client requests cancellation.
+	//       Any buffered reasoning or tool calls should be flushed before emitting cancelled.
+	HandleCancel() error
+
 	// Transform processes a single SSE event.
 	//
 	// @brief Processes a single SSE event and writes transformed output.

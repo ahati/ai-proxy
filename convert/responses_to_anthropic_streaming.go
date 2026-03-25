@@ -343,5 +343,16 @@ func (t *ResponsesToAnthropicStreamingTransformer) Close() error {
 	return t.Flush()
 }
 
+// Initialize prepares the transformer and emits initial events before upstream request.
+// For ResponsesToAnthropicStreamingTransformer, this is a no-op as no initial events are needed.
+func (t *ResponsesToAnthropicStreamingTransformer) Initialize() error {
+	return nil
+}
+
+// HandleCancel handles cancellation requests.
+func (t *ResponsesToAnthropicStreamingTransformer) HandleCancel() error {
+	return nil
+}
+
 // Verify interface compliance
 var _ transform.SSETransformer = (*ResponsesToAnthropicStreamingTransformer)(nil)

@@ -36,20 +36,35 @@ func TransformResponsesToAnthropic(body []byte) ([]byte, error) {
 
 // TransformResponsesToAnthropicWithCache converts an OpenAI ResponsesRequest to an Anthropic MessageRequest.
 // This handles the translation of all request fields including input, tools, and parameters.
-// When previous_response_id is provided, it walks the conversation chain from the store
+// When previous_response_id is provided and shouldStore is true, it walks the conversation chain from the store
 // and prepends all history to the current input.
 // If ctx contains a CaptureContext, sets CacheHit when conversation is found.
 func TransformResponsesToAnthropicWithCache(body []byte, ctx context.Context) ([]byte, error) {
+	return TransformResponsesToAnthropicWithOptions(body, ctx, true)
+}
+
+// TransformResponsesToAnthropicWithOptions converts an OpenAI ResponsesRequest to an Anthropic MessageRequest.
+// This handles the translation of all request fields including input, tools, and parameters.
+// When previous_response_id is provided and shouldStore is true, it walks the conversation chain from the store
+// and prepends all history to the current input.
+// If ctx contains a CaptureContext, sets CacheHit when conversation is found.
+// The shouldStore parameter controls whether to fetch conversation history from the store (ZDR mode when false).
+func TransformResponsesToAnthropicWithOptions(body []byte, ctx context.Context, shouldStore bool) ([]byte, error) {
 	// Parse the OpenAI Responses API format request
 	var openReq types.ResponsesRequest
 	if err := json.Unmarshal(body, &openReq); err != nil {
 		return nil, err
 	}
 
-	// Fetch conversation history chain if previous_response_id is provided
-	if openReq.PreviousResponseID != "" {
-		chain := conversation.WalkChainFromDefault(openReq.PreviousResponseID)
-		if len(chain) > 0 {
+	// Fetch conversation history chain if previous_response_id is provided and store is true
+	// In ZDR mode (store:false), we skip the DB chain walk
+	if openReq.PreviousResponseID != "" && shouldStore {
+		// TODO: Wire userID from request headers for proper ownership validation
+		chain, err := conversation.WalkChainFromDefaultWithOwnership(openReq.PreviousResponseID, "")
+		if err != nil {
+			// Ownership error - log warning
+			logging.InfoMsg("Warning: Conversation access denied: %s", err.Error())
+		} else if len(chain) > 0 {
 			// Mark cache hit
 			capture.SetCacheHit(ctx)
 			// Prepend all conversations in the chain (oldest first)
@@ -95,6 +110,16 @@ func TransformResponsesToAnthropicWithCache(body []byte, ctx context.Context) ([
 	// Convert reasoning to thinking configuration
 	if openReq.Reasoning != nil {
 		anthReq.Thinking = convertReasoningToThinking(openReq.Reasoning, maxTokens)
+	}
+
+	// Handle encrypted_reasoning for ZDR mode
+	// Note: Anthropic doesn't support encrypted_reasoning directly, but we document it here
+	// for potential future support or if a proxy layer adds support.
+	if openReq.EncryptedReasoning != "" {
+		// Encrypted reasoning is passed in ZDR mode (store:false)
+		// Currently not forwarded to Anthropic as they don't support this field
+		// The encrypted blob would need to be handled by a compatible upstream
+		logging.DebugMsg("encrypted_reasoning provided in ZDR mode but not forwarded to Anthropic")
 	}
 
 	// Convert metadata.user_id
