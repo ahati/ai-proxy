@@ -36,11 +36,11 @@ go mod tidy
 
 ### Build Cache
 
-llama.cpp is cached at `~/.cache/ai-proxy/llama-cpp-<summarizer-version>/`.
+llama.cpp is cached at `.build/llama-cpp-<summarizer-version>/` (gitignored).
 - First build: ~2 minutes to compile llama.cpp
 - Subsequent builds: instant (uses cached libraries)
 - Cache is versioned by summarizer module - upgrading summarizer triggers rebuild
-- Clean with `make clean-cache` (not cleaned by `go clean`)
+- Clean with `make clean-cache` or `rm -rf .build`
 
 ## Code Style Guidelines
 

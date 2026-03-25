@@ -6,3 +6,4 @@ ai-proxy
 converter
 plans
 .ruff_cache
+.build
