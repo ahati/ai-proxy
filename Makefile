@@ -6,11 +6,11 @@ BUILD_DIR=.
 CONFIG_DIR=$(HOME)/.config/ai-proxy
 CONFIG_FILE=$(CONFIG_DIR)/config.json
 
-# llama.cpp configuration - cache is tied to summarizer module version
+# llama.cpp configuration - cache in XDG cache directory
 LLAMA_VERSION?=b8508
 LLAMA_REPO?=https://github.com/ggml-org/llama.cpp.git
 SUMMARIZER_VERSION=$(shell grep 'github.com/ahati/reasoning-summarizer' go.mod | awk '{print $$2}')
-LLAMA_CACHE_DIR=$(shell go env GOCACHE)/github.com-ahati-reasoning-summarizer-$(SUMMARIZER_VERSION)/llama-cpp
+LLAMA_CACHE_DIR=$(HOME)/.cache/ai-proxy/llama-cpp-$(SUMMARIZER_VERSION)
 
 # Use ninja if available, otherwise make
 CMAKE_GENERATOR=$(shell command -v ninja >/dev/null 2>&1 && echo "Ninja" || echo "Unix Makefiles")
@@ -50,4 +50,4 @@ clean:
 	rm -f $(BINARY_NAME)
 
 clean-cache:
-	rm -rf $(shell go env GOCACHE)/github.com-ahati-reasoning-summarizer-*
+	rm -rf $(HOME)/.cache/ai-proxy/llama-cpp-*

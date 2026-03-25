@@ -36,10 +36,11 @@ go mod tidy
 
 ### Build Cache
 
-llama.cpp is cached at `$GOCACHE/github.com-ahati-reasoning-summarizer-<version>/llama-cpp/`.
+llama.cpp is cached at `~/.cache/ai-proxy/llama-cpp-<summarizer-version>/`.
 - First build: ~2 minutes to compile llama.cpp
 - Subsequent builds: instant (uses cached libraries)
 - Cache is versioned by summarizer module - upgrading summarizer triggers rebuild
+- Clean with `make clean-cache` (not cleaned by `go clean`)
 
 ## Code Style Guidelines
 
