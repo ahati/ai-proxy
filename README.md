@@ -20,11 +20,14 @@ Each conversion handles message structure, tool call formats, streaming semantic
 
 **Kimi tool-call extraction** makes Kimi-K2.5/K2 usable. These models embed tool calls in reasoning tokens using proprietary delimiters (`<|tool_calls_section_begin|>`, `<|tool_call_begin|>`) rather than standard formats. Without real-time extraction from the SSE `delta.reasoning` stream, agents receive malformed tool calls and function-calling breaks. This proxy's state-machine parser extracts and reformats tool calls into standard OpenAI/Anthropic structures—making Kimi viable for production agents.
 
+**Server-side web search** enables real-time information retrieval. Models can use the `web_search` tool to fetch current information from the web. The proxy intercepts `server_tool_use` blocks, executes searches via Exa/Brave/DuckDuckGo, and injects results into the response stream—matching Anthropic's built-in web search behavior.
+
 ## Features
 
 - **Multi-format support**: OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses API
 - **Bidirectional conversion**: Convert between OpenAI and Anthropic formats in both directions
 - **Tool call normalization**: Transforms Kimi-K2.5/K2's proprietary tool call format into standard formats
+- **Server-side web search**: Execute web searches via Exa, Brave, or DuckDuckGo when models use the `web_search` tool
 - **Streaming support**: Real-time SSE streaming with format transformation
 - **Request capture**: Optional logging of all requests/responses for debugging
 - **Model-based routing**: Route requests to different providers based on model name
@@ -87,6 +90,13 @@ The proxy requires a JSON configuration file. By default, it searches for `confi
     "enabled": true,
     "provider": "alibaba",
     "model": "{model}"
+  },
+  "websearch": {
+    "enabled": true,
+    "provider": "exa",
+    "exa_api_key": "${EXA_API_KEY}",
+    "max_results": 10,
+    "timeout": 30
   }
 }
 ```
@@ -111,6 +121,25 @@ The proxy requires a JSON configuration file. By default, it searches for `confi
 | `kimi_tool_call_transform` | Enable Kimi tool-call extraction (default: `false`) |
 | `glm5_tool_call_transform` | Enable GLM-5 XML tool-call extraction (default: `false`) |
 | `reasoning_split` | Enable separate reasoning output for supported models (default: `false`) |
+
+#### Web Search Configuration
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | Enable/disable web search service (default: `false`) |
+| `provider` | Search backend: `"exa"`, `"brave"`, or `"ddg"` |
+| `exa_api_key` | API key for Exa.ai (required if provider is `exa`) |
+| `brave_api_key` | API key for Brave Search (required if provider is `brave`) |
+| `max_results` | Maximum search results per query (default: `10`) |
+| `timeout` | Search request timeout in seconds (default: `30`) |
+
+**Search Backends:**
+
+| Provider | API Key Required | Features |
+|----------|-----------------|----------|
+| `exa` | Yes ([exa.ai](https://exa.ai)) | High-quality results, content extraction |
+| `brave` | Yes ([brave.com](https://brave.com/search/api)) | Fast, comprehensive web index |
+| `ddg` | No | Free, no API key needed, limited results |
 
 ### Running the Proxy
 
@@ -143,155 +172,155 @@ CONFIG_FILE=/path/to/config.json ./ai-proxy
 
 ### Using with Codex
 
-Set the OpenAI base URL to point to the proxy:
+Set the OpenAI base URL and API key:
 
 ```bash
-# In your environment or .env
-OPENAI_API_BASE=http://localhost:8080/v1
-OPENAI_API_KEY=any-key
+export OPENAI_BASE_URL=http://localhost:8080/v1
+export OPENAI_API_KEY=your-provider-api-key  # Will be passed through to upstream
 ```
 
-Codex will now route all requests through the proxy, enabling access to Alibaba models, Kimi, and any other configured providers.
+Then configure `~/.codex/config.toml`:
 
-### Fallback Behavior
+```toml
+model = "qwen3-max"  # Routes to Alibaba Qwen3
 
-When `fallback.enabled` is `true`, failed requests are automatically retried with the fallback provider. Use `{model}` as a placeholder to preserve the original model name:
+[mcp]
+enabled = false
+```
+
+### API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Health check |
+| GET | `/v1/models` | List available models |
+| POST | `/v1/chat/completions` | OpenAI-compatible chat completions |
+| POST | `/v1/messages` | Anthropic Messages API |
+| POST | `/v1/responses` | OpenAI Responses API |
+
+## Web Search Tool
+
+The proxy supports Anthropic-style server-side web search. When enabled, models can use the `web_search` tool to fetch real-time information.
+
+### How It Works
+
+```
+Client Request with tools: [{type: "web_search_20250305", name: "web_search"}]
+         │
+         ▼
+Upstream LLM generates response:
+  - "I'll search for..."
+  - server_tool_use: {name: "web_search", input: {query: "..."}}
+         │
+         ▼
+Proxy intercepts server_tool_use:
+  1. Detects web_search tool call
+  2. Executes search via configured backend (Exa/Brave/DDG)
+  3. Injects synthetic web_search_tool_result event
+         │
+         ▼
+Client receives:
+  - Text content
+  - server_tool_use block
+  - web_search_tool_result block (injected by proxy)
+  - Final answer with search results
+```
+
+### Usage Example
+
+**Request:**
+```json
+{
+  "model": "claude-sonnet-4-6",
+  "max_tokens": 1024,
+  "messages": [
+    {"role": "user", "content": "What's the latest news about GPT-5?"}
+  ],
+  "tools": [
+    {"type": "web_search_20250305", "name": "web_search"}
+  ]
+}
+```
+
+**Response (streaming):**
+```
+event: content_block_start
+data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+
+event: content_block_delta
+data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "I'll search for the latest news about GPT-5."}}
+
+event: content_block_start
+data: {"type": "content_block_start", "index": 1, "content_block": {"type": "server_tool_use", "id": "search_001", "name": "web_search"}}
+
+event: content_block_delta
+data: {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"query\":\"latest news GPT-5 2025\"}"}}
+
+event: content_block_stop
+data: {"type": "content_block_stop", "index": 1}
+
+event: content_block_start
+data: {"type": "content_block_start", "index": 2, "content_block": {"type": "web_search_tool_result", "tool_use_id": "search_001", "content": [...]}}
+
+event: content_block_stop
+data: {"type": "content_block_stop", "index": 2}
+
+event: content_block_start
+data: {"type": "content_block_start", "index": 3, "content_block": {"type": "text", "text": ""}}
+
+event: content_block_delta
+data: {"type": "content_block_delta", "index": 3, "delta": {"type": "text_delta", "text": "Based on the search results..."}}
+```
+
+### Environment Variables
+
+Set API keys via environment variables:
+
+```bash
+export EXA_API_KEY=your-exa-api-key
+export BRAVE_API_KEY=your-brave-api-key
+```
+
+Reference them in config using `${VAR_NAME}` syntax:
 
 ```json
 {
-  "fallback": {
+  "websearch": {
     "enabled": true,
-    "provider": "alibaba",
-    "model": "{model}",
-    "tool_call_transform": false
+    "provider": "exa",
+    "exa_api_key": "${EXA_API_KEY}"
   }
 }
 ```
 
-## API Endpoints
-
-| Method | Path | Request Format | Response Format | Description |
-|--------|------|----------------|-----------------|-------------|
-| `GET` | `/health` | N/A | N/A | Health check |
-| `GET` | `/v1/models` | OpenAI | OpenAI | List available models |
-| `POST` | `/v1/chat/completions` | OpenAI | OpenAI | Chat completions (routes by model) |
-| `POST` | `/v1/messages` | Anthropic | Anthropic | Anthropic messages (routes by model) |
-| `POST` | `/v1/messages/count_tokens` | Anthropic | Anthropic | Count tokens in messages |
-| `POST` | `/v1/responses` | OpenAI Responses | OpenAI Responses | OpenAI Responses API (routes by model) |
-
-## Architecture
-
-The proxy uses a unified handler architecture where each endpoint intelligently routes requests based on model configuration:
+## Request Flow
 
 ```
-                                    ┌──────────────────────────────────────────────────┐
-                                    │                  AI Proxy                        │
-                                    │                                                  │
-                                    │  ┌────────────────────────────────────────────┐  │
-┌──────────────┐                    │  │         /v1/chat/completions               │  │
-│  OpenAI SDK  │──▶ POST /v1/chat/completions ──▶│                            │──┼──▶ Provider (by model)
-│              │◀── OpenAI Response ─────────────│  Routes based on model:    │◀─┼─── Provider Response
-└──────────────┘                    │  │  • OpenAI provider → pass through          │  │
-                                    │  │  • Anthropic provider → convert O→A→O      │  │
-                                    │  └────────────────────────────────────────────┘  │
-┌──────────────┐                    │  ┌────────────────────────────────────────────┐  │
-│ Anthropic SDK│──▶ POST /v1/messages ──────────▶│                            │──┼──▶ Provider (by model)
-│              │◀─ Anthropic Response ───────────│  Routes based on model:    │◀─┼─── Provider Response
-└──────────────┘                    │  │  • Anthropic provider → pass through       │  │
-                                    │  │  • OpenAI provider → convert A→O→A         │  │
-                                    │  └────────────────────────────────────────────┘  │
-┌──────────────┐                    │  ┌────────────────────────────────────────────┐  │
-│ OpenAI SDK   │──▶ POST /v1/responses ─────────▶│                            │──┼──▶ Provider (by model)
-│ (Responses)  │◀── OpenAI Response ─────────────│  Routes based on model:    │◀─┼─── Provider Response
-└──────────────┘                    │  │  • OpenAI provider → convert R→C→R         │  │
-                                    │  │  • Anthropic provider → convert R→A→R      │  │
-                                    │  └────────────────────────────────────────────┘  │
-                                    │                                                  │
-                                    └──────────────────────────────────────────────────┘
-
-Legend: O=OpenAI Chat, A=Anthropic Messages, R=OpenAI Responses, C=OpenAI Chat
+┌────────────┐
+│   Client   │
+└─────┬──────┘
+      │ 1. Downstream TX
+      ▼
+┌────────────┐
+│   Proxy    │──► Capture (optional)
+└─────┬──────┘
+      │ 2. Upstream TX
+      ▼
+┌────────────┐
+│   LLM API  │
+└─────┬──────┘
+      │ 3. Upstream RX
+      ▼
+┌────────────┐
+│   Proxy    │──► Transform (format, tool calls, web search)
+└─────┬──────┘
+      │ 4. Downstream RX
+      ▼
+┌────────────┐
+│   Client   │
+└────────────┘
 ```
 
-### Request Flow
-
-1. Client sends request to unified endpoint with a model name
-2. Router resolves model name to provider configuration
-3. Handler transforms request format if needed (e.g., OpenAI → Anthropic)
-4. Request is forwarded to the appropriate upstream provider
-5. Response is transformed back to the client's expected format
-
-## Tool Call Transformation
-
-Kimi-K2.5 and K2 models output tool/function calls using special delimiter tokens embedded in the SSE `reasoning` field, rather than standard formats. This proxy transforms these in real-time during streaming.
-
-### Non-Standard Format (Input)
-
-```
-<|tool_calls_section_begin|>
-<|tool_call_begin|>get_weather<|tool_call_argument_begin|>{"location": "San Francisco"}<|tool_call_end|>
-<|tool_calls_section_end|>
-```
-
-### Standard Format (Output - OpenAI)
-
-```json
-{
-  "tool_calls": [
-    {
-      "id": "call_abc123",
-      "type": "function",
-      "function": {
-        "name": "get_weather",
-        "arguments": "{\"location\": \"San Francisco\"}"
-      }
-    }
-  ]
-}
-```
-
-### Standard Format (Output - Anthropic)
-
-```json
-{
-  "content": [
-    {
-      "type": "tool_use",
-      "id": "toolu_abc123",
-      "name": "get_weather",
-      "input": {"location": "San Francisco"}
-    }
-  ]
-}
-```
-
-### Configuration
-
-Enable tool call transformation per model in your config:
-
-```json
-{
-  "models": {
-    "kimi-k2.5": {
-      "provider": "alibaba",
-      "model": "kimi-k2.5",
-      "tool_call_transform": true
-    }
-  }
-}
-```
-
-## Request Capture
-
-When `SSELOG_DIR` is set, all requests are captured to structured JSON files:
-
-```bash
-./ai-proxy --config-file config.json --sse-log-dir ./logs
-
-# Logs are organized by date
-ls logs/$(date +%Y-%m-%d)/
-```
-
-**Captured data** (4 capture points):
 1. **Downstream TX** - Client request to proxy
 2. **Upstream TX** - Proxy request to LLM API
 3. **Upstream RX** - LLM API response to proxy
@@ -337,21 +366,31 @@ ai-proxy/
 │   ├── interface.go            # Transformer interface
 │   ├── passthrough.go          # Pass-through transformer
 │   ├── sse_writer.go           # SSE streaming writer
-│   └── toolcall/               # Tool call format transformation
-│       ├── parser.go           # Token parsing
-│       ├── tokens.go           # Special token definitions
-│       ├── state.go            # State machine
-│       ├── formatter.go        # Output formatting
-│       ├── common.go           # Shared utilities
-│       ├── openai.go           # OpenAI format support
-│       ├── anthropic.go        # Anthropic format support
-│       ├── openai_transformer.go    # OpenAI format transformer
-│       ├── anthropic_transformer.go # Anthropic format transformer
-│       └── responses_transformer.go # Responses API transformer
+│   ├── toolcall/               # Tool call format transformation
+│   │   ├── parser.go           # Token parsing
+│   │   ├── tokens.go           # Special token definitions
+│   │   ├── state.go            # State machine
+│   │   ├── formatter.go        # Output formatting
+│   │   ├── common.go           # Shared utilities
+│   │   ├── openai.go           # OpenAI format support
+│   │   ├── anthropic.go        # Anthropic format support
+│   │   ├── openai_transformer.go    # OpenAI format transformer
+│   │   ├── anthropic_transformer.go # Anthropic format transformer
+│   │   └── responses_transformer.go # Responses API transformer
+│   └── websearch/              # Web search transformation
+│       ├── transformer.go      # SSE transformer for web search interception
+│       └── transformer_test.go # Tests for web search transformer
+├── websearch/                  # Web search service
+│   ├── service.go              # Main service with backend selection
+│   ├── adapter.go              # Adapter for transformer integration
+│   ├── exa.go                  # Exa.ai backend
+│   ├── brave.go                # Brave Search backend
+│   └── ddg.go                  # DuckDuckGo backend
 ├── types/                      # Type definitions
 │   ├── openai.go               # OpenAI Chat API types
 │   ├── openai_responses.go     # OpenAI Responses API types
 │   ├── anthropic.go            # Anthropic API types
+│   ├── websearch.go            # Web search types
 │   └── sse.go                  # Server-Sent Events types
 ├── proxy/                      # Upstream API client
 │   ├── client.go               # HTTP client for upstream APIs
@@ -389,6 +428,16 @@ The `ToolCallTransformer` implements a 5-state machine (`IDLE → IN_SECTION →
 | `<\|tool_call_argument_begin\|>` | Starts the JSON arguments |
 | `<\|tool_call_end\|>` | Ends the current tool call |
 | `<\|tool_calls_section_end\|>` | Ends the tool calls section |
+
+### Web Search Interception
+
+The `WebSearchTransformer` wraps the SSE response stream and:
+
+1. Monitors for `content_block_start` events with `type: "server_tool_use"` and `name: "web_search"`
+2. Buffers the streaming JSON input via `input_json_delta` events
+3. On `content_block_stop`, executes the search via the configured backend
+4. Injects synthetic `web_search_tool_result` events into the stream
+5. Handles multiple concurrent web search blocks using a map keyed by block ID
 
 ### Format Conversions
 

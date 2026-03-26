@@ -7,7 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 )
+
+// envVarRegex matches ${VAR_NAME} or $VAR_NAME patterns
+var envVarRegex = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)`)
 
 // isValidProtocol checks if the given string is a valid protocol name.
 // Valid protocols are: "openai", "anthropic", "responses".
@@ -155,13 +160,50 @@ func (l *Loader) validate(s *Schema) error {
 // resolveEnvVars resolves environment variables in the configuration.
 // For each provider, if EnvAPIKey is set and APIKey is empty, the APIKey
 // field is populated from the environment variable value.
+// Also expands ${VAR} patterns in string fields like API keys.
 //
 // @param s - the schema to resolve environment variables in
 func (l *Loader) resolveEnvVars(s *Schema) {
 	for i := range s.Providers {
 		p := &s.Providers[i]
+		// Expand env vars in apiKey if it contains ${...} pattern
+		p.APIKey = expandEnvVars(p.APIKey)
+		// If apiKey is empty and envApiKey is set, get from env
 		if p.APIKey == "" && p.EnvAPIKey != "" {
 			p.APIKey = os.Getenv(p.EnvAPIKey)
 		}
 	}
+
+	// Expand environment variables in websearch config
+	s.WebSearch.ExaAPIKey = expandEnvVars(s.WebSearch.ExaAPIKey)
+	s.WebSearch.BraveAPIKey = expandEnvVars(s.WebSearch.BraveAPIKey)
+}
+
+// expandEnvVars expands ${VAR_NAME} patterns in a string with the
+// corresponding environment variable values. If the environment
+// variable is not set, the pattern is left unchanged.
+//
+// @param s - the string to expand
+// @return the expanded string
+func expandEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
+		// Extract variable name from ${VAR} or $VAR format
+		varName := ""
+		if strings.HasPrefix(match, "${") && strings.HasSuffix(match, "}") {
+			varName = match[2 : len(match)-1]
+		} else if strings.HasPrefix(match, "$") {
+			varName = match[1:]
+		}
+		if varName == "" {
+			return match
+		}
+		if value := os.Getenv(varName); value != "" {
+			return value
+		}
+		// If env var not set, return empty string (or could return original match)
+		return ""
+	})
 }

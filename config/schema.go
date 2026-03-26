@@ -4,6 +4,8 @@ package config
 
 import (
 	"os"
+
+	"ai-proxy/types"
 )
 
 // Provider defines an upstream API provider configuration.
@@ -186,4 +188,6 @@ type Schema struct {
 	Summarizer SummarizerConfig `json:"summarizer"`
 	// Responses defines Responses API specific configuration.
 	Responses ResponsesConfig `json:"responses"`
+	// WebSearch defines the web search service configuration.
+	WebSearch types.WebSearchConfig `json:"websearch"`
 }

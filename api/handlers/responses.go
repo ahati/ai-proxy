@@ -14,7 +14,9 @@ import (
 	"ai-proxy/router"
 	"ai-proxy/transform"
 	"ai-proxy/transform/toolcall"
+	wstransform "ai-proxy/transform/websearch"
 	"ai-proxy/types"
+	"ai-proxy/websearch"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,6 +34,7 @@ const maxEncryptedReasoningSize = 1 * 1024 * 1024 // 1MB
 //   - For OpenAI upstream: converts to Chat Completions format
 //   - For Anthropic upstream: converts to Anthropic Messages format
 //   - Transforms responses back to OpenAI Responses API format
+//   - Supports web search tool interception when web search service is enabled
 //
 // @note This enables clients using OpenAI Responses API to call multiple providers.
 type ResponsesHandler struct {
@@ -236,6 +239,7 @@ func (h *ResponsesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
 // CreateTransformer builds an SSE transformer for converting upstream responses.
 // For OpenAI providers, it converts Chat Completions to Responses API format.
 // For Anthropic providers, it converts Anthropic events to Responses API format.
+// If web search service is enabled, wraps the transformer to intercept web_search tool calls.
 //
 // @param w - Writer to receive transformed output.
 // @return Transformer for processing SSE events.
@@ -246,8 +250,10 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 
 	// Passthrough: no transformation needed
 	if h.route.IsPassthrough && !h.route.KimiToolCallTransform {
-		return transform.NewPassthroughTransformer(w)
+		return h.wrapWithWebSearch(transform.NewPassthroughTransformer(w))
 	}
+
+	var baseTransformer transform.SSETransformer
 
 	switch h.route.OutputProtocol {
 	case "openai":
@@ -261,7 +267,7 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 		t.SetPreviousResponseID(h.previousResponseID)
 		t.SetReasoningSummaryMode(h.reasoningSummaryMode)
 		t.SetEncryptedReasoning(h.encryptedReasoning)
-		return t
+		baseTransformer = t
 	case "anthropic":
 		// ResponsesTransformer converts Anthropic SSE to Responses format
 		// This conversion is always needed for /v1/responses endpoint
@@ -274,10 +280,28 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 		t.SetPreviousResponseID(h.previousResponseID)
 		t.SetReasoningSummaryMode(h.reasoningSummaryMode)
 		t.SetEncryptedReasoning(h.encryptedReasoning)
-		return t
+		baseTransformer = t
 	default:
 		return transform.NewPassthroughTransformer(w)
 	}
+
+	// Wrap with web search transformer if enabled
+	return h.wrapWithWebSearch(baseTransformer)
+}
+
+// wrapWithWebSearch wraps the base transformer with web search interception if enabled.
+//
+// @param base - The base transformer to wrap.
+// @return The wrapped transformer, or the base transformer if web search is not enabled.
+func (h *ResponsesHandler) wrapWithWebSearch(base transform.SSETransformer) transform.SSETransformer {
+	// Get the web search adapter (returns nil if service is not enabled)
+	adapter := websearch.GetDefaultAdapter()
+	if adapter == nil || !adapter.IsEnabled() {
+		return base
+	}
+
+	// Wrap the base transformer with web search interception
+	return wstransform.NewTransformer(base, adapter)
 }
 
 // WriteError sends an error response in OpenAI Responses API format.

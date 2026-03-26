@@ -101,5 +101,13 @@
       "threads": 4,
       "max_summary_tokens": 50
     }
+  },
+  "websearch": {
+    "enabled": true,
+    "provider": "exa",
+    "exa_api_key": "${EXA_API_KEY}",
+    "brave_api_key": "${BRAVE_API_KEY}",
+    "max_results": 10,
+    "timeout": 30
   }
 }
