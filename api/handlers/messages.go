@@ -14,7 +14,9 @@ import (
 	"ai-proxy/router"
 	"ai-proxy/transform"
 	"ai-proxy/transform/toolcall"
+	wstransform "ai-proxy/transform/websearch"
 	"ai-proxy/types"
+	"ai-proxy/websearch"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,6 +30,7 @@ import (
 //   - For Anthropic providers: passes through requests without transformation
 //   - For OpenAI providers: converts Anthropic→OpenAI Chat, transforms responses back
 //   - Supports streaming responses with tool use handling
+//   - Supports web search tool interception when web search service is enabled
 //
 // @note This enables clients using Anthropic SDK to call any provider.
 type MessagesHandler struct {
@@ -144,8 +147,9 @@ func (h *MessagesHandler) TransformRequest(ctx context.Context, body []byte) ([]
 		}
 		return transformed, nil
 	case "anthropic":
-		// Pass through without transformation
-		return updatedBody, nil
+		// Normalize web_search_tool_result to tool_result for upstream compatibility
+		// Many Anthropic-compatible providers don't support web_search_tool_result natively
+		return convert.NormalizeWebSearchToolResultsInMessages(updatedBody), nil
 	case "responses":
 		// Convert Anthropic Messages to Responses API format
 		return convert.TransformAnthropicToResponses(updatedBody)
@@ -190,69 +194,69 @@ func (h *MessagesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
 
 	switch outputProtocol {
 	case "openai":
-		// Forward custom headers that may be used by OpenAI-compatible upstream
-		for k, v := range c.Request.Header {
-			// Only forward X-* headers and Extra header
-			// Do NOT forward Anthropic-specific headers as they may confuse OpenAI API
-			if strings.HasPrefix(k, "X-") || k == "Extra" {
-				req.Header[k] = v
-			}
-		}
+		// Forward custom headers only
+		forwardCustomHeaders(c, req, "X-")
 	case "anthropic":
-		// Forward headers that are important for Anthropic API
+		// Forward Anthropic-specific headers
 		for k, v := range c.Request.Header {
-			// Forward custom headers with X- prefix
-			// Forward Anthropic-Version which is required for API versioning
-			// Forward Anthropic-Beta for beta feature access
 			if strings.HasPrefix(k, "X-") || k == "Anthropic-Version" || k == "Anthropic-Beta" {
 				req.Header[k] = v
 			}
 		}
-	case "responses":
-		// Forward custom headers for Responses API
-		forwardCustomHeaders(c, req, "X-")
 	default:
 		// Forward X-* headers by default
 		forwardCustomHeaders(c, req, "X-")
 	}
 }
 
-// CreateTransformer builds an SSE transformer based on the provider type.
-// For Anthropic providers: uses AnthropicTransformer for tool call handling.
-// For OpenAI providers: uses ChatToAnthropicTransformer to convert OpenAI Chat responses back to Anthropic format.
+// CreateTransformer builds an SSE transformer for converting upstream responses.
+// For OpenAI providers: converts Chat Completions to Anthropic format.
+// For Anthropic providers: passes through SSE events.
+// If web search service is enabled, wraps the transformer to intercept web_search tool calls.
 //
 // @param w - Writer to receive transformed output.
 // @return Transformer for processing SSE events.
 func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransformer {
+	// No route resolved: pass through
 	if h.route == nil {
-		// Legacy behavior - use Anthropic transformer
-		logging.InfoMsg("Using legacy AnthropicTransformer (no route resolved)")
-		return toolcall.NewAnthropicTransformer(w)
+		return h.wrapWithWebSearch(transform.NewPassthroughTransformer(w))
 	}
 
-	// Passthrough: no transformation needed
-	if h.route.IsPassthrough && !h.route.KimiToolCallTransform {
-		return transform.NewPassthroughTransformer(w)
+	// Passthrough optimization
+	if h.route.IsPassthrough {
+		return h.wrapWithWebSearch(transform.NewPassthroughTransformer(w))
 	}
+
+	var baseTransformer transform.SSETransformer
 
 	switch h.route.OutputProtocol {
 	case "openai":
-		// Convert OpenAI Chat responses back to Anthropic format
-		logging.InfoMsg("Using ChatToAnthropicTransformer for OpenAI upstream (model=%s)", h.route.Model)
-		return convert.NewChatToAnthropicTransformer(w)
+		// OpenAI to Anthropic transformer
+		baseTransformer = toolcall.NewAnthropicTransformer(w)
 	case "anthropic":
-		// Use Anthropic transformer for tool call handling
-		if h.route.KimiToolCallTransform {
-			return toolcall.NewAnthropicTransformer(w)
-		}
-		return transform.NewPassthroughTransformer(w)
-	case "responses":
-		// Convert OpenAI Responses SSE back to Anthropic format
-		// For now, use passthrough since Responses API output doesn't need conversion back
-		return transform.NewPassthroughTransformer(w)
+		// Passthrough for native Anthropic
+		baseTransformer = transform.NewPassthroughTransformer(w)
 	default:
 		return transform.NewPassthroughTransformer(w)
 	}
+
+	// Wrap with web search transformer if enabled
+	return h.wrapWithWebSearch(baseTransformer)
+}
+
+// wrapWithWebSearch wraps the base transformer with web search interception if enabled.
+//
+// @param base - The base transformer to wrap.
+// @return The wrapped transformer, or the base transformer if web search is not enabled.
+func (h *MessagesHandler) wrapWithWebSearch(base transform.SSETransformer) transform.SSETransformer {
+	// Get the web search adapter (returns nil if service is not enabled)
+	adapter := websearch.GetDefaultAdapter()
+	if adapter == nil || !adapter.IsEnabled() {
+		return base
+	}
+
+	// Wrap the base transformer with web search interception
+	return wstransform.NewTransformer(base, adapter)
 }
 
 // WriteError sends an error response in Anthropic format.

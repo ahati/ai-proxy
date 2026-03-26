@@ -189,6 +189,15 @@ func anthropicUserBlocksToChatMessages(blocks []interface{}) ([]types.Message, e
 				ToolCallID: toolUseID,
 				Content:    content,
 			})
+		case "web_search_tool_result":
+			// Convert web_search_tool_result to tool_result for non-Anthropic providers
+			toolUseID, _ := b["tool_use_id"].(string)
+			content := extractWebSearchContentToText(b["content"])
+			toolResults = append(toolResults, types.Message{
+				Role:       "tool",
+				ToolCallID: toolUseID,
+				Content:    content,
+			})
 		case "text":
 			text, _ := b["text"].(string)
 			contentParts = append(contentParts, map[string]interface{}{
@@ -410,4 +419,17 @@ func AnthropicMessageInfoToChatResponse(msg *types.MessageInfo) map[string]inter
 		},
 	}
 	return response
+}
+
+// extractWebSearchContentToText extracts text from web_search_tool_result content.
+// It wraps ConvertWebSearchContentToText and converts the result to a string.
+func extractWebSearchContentToText(content interface{}) string {
+	result := ConvertWebSearchContentToText(content)
+	switch v := result.(type) {
+	case string:
+		return v
+	default:
+		b, _ := json.Marshal(result)
+		return string(b)
+	}
 }

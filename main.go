@@ -11,6 +11,7 @@ import (
 	"ai-proxy/conversation"
 	"ai-proxy/logging"
 	"ai-proxy/summarizer"
+	"ai-proxy/websearch"
 )
 
 // main loads configuration, initializes logging and storage, then starts the HTTP server.
@@ -45,6 +46,12 @@ func main() {
 
 	// Initialize summarizer service for reasoning summarization
 	summarizer.InitDefaultService(cfg.AppConfig)
+
+	// Initialize web search service for web_search tool execution
+	websearch.DefaultService = websearch.InitDefaultService(cfg.AppConfig.WebSearch)
+	if websearch.DefaultService != nil {
+		logging.InfoMsg("Web search service initialized: backend=%s", websearch.DefaultService.GetBackend())
+	}
 
 	// Initialize storage for request capture if logging is enabled
 	storage := api.InitStorage(cfg.SSELogDir)

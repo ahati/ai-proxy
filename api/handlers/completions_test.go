@@ -1,8 +1,8 @@
 package handlers
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
