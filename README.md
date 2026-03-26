@@ -58,14 +58,16 @@ The proxy requires a JSON configuration file. By default, it searches for `confi
   "providers": [
     {
       "name": "alibaba",
-      "type": "openai",
-      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "endpoints": {
+        "openai": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      },
       "envApiKey": "ALIBABA_API_KEY"
     },
     {
       "name": "anthropic",
-      "type": "anthropic",
-      "base_url": "https://api.anthropic.com",
+      "endpoints": {
+        "anthropic": "https://api.anthropic.com/v1"
+      },
       "envApiKey": "ANTHROPIC_API_KEY"
     }
   ],
@@ -73,12 +75,12 @@ The proxy requires a JSON configuration file. By default, it searches for `confi
     "qwen3-max": {
       "provider": "alibaba",
       "model": "qwen3-max-2026-01-23",
-      "tool_call_transform": false
+      "kimi_tool_call_transform": false
     },
     "kimi-k2.5": {
       "provider": "alibaba",
       "model": "kimi-k2.5",
-      "tool_call_transform": true
+      "kimi_tool_call_transform": true
     }
   },
   "fallback": {
@@ -94,8 +96,8 @@ The proxy requires a JSON configuration file. By default, it searches for `confi
 | Field | Description |
 |-------|-------------|
 | `name` | Unique identifier for the provider |
-| `type` | API format: `"openai"` or `"anthropic"` |
-| `base_url` | Provider's API endpoint URL |
+| `endpoints` | Map of protocol names to endpoint URLs: `"openai"`, `"anthropic"`, `"responses"` |
+| `default` | Default protocol when multiple endpoints configured (optional) |
 | `apiKey` | Direct API key (optional) |
 | `envApiKey` | Environment variable name for API key |
 
@@ -105,7 +107,10 @@ The proxy requires a JSON configuration file. By default, it searches for `confi
 |-------|-------------|
 | `provider` | Provider name to route requests to |
 | `model` | Actual model identifier on the provider |
-| `tool_call_transform` | Enable Kimi tool-call extraction (default: `false`) |
+| `type` | Output protocol: `"openai"`, `"anthropic"`, `"responses"`, or `"auto"` (default: use provider default) |
+| `kimi_tool_call_transform` | Enable Kimi tool-call extraction (default: `false`) |
+| `glm5_tool_call_transform` | Enable GLM-5 XML tool-call extraction (default: `false`) |
+| `reasoning_split` | Enable separate reasoning output for supported models (default: `false`) |
 
 ### Running the Proxy
 
