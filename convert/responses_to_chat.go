@@ -20,11 +20,14 @@ import (
 type ResponsesToChatConverter struct {
 	reasoningSplit bool
 	cacheHit       bool
+	shouldStore    bool // Controls whether to store conversation (default: true)
 }
 
 // NewResponsesToChatConverter creates a new converter for Responses to Chat format.
 func NewResponsesToChatConverter() *ResponsesToChatConverter {
-	return &ResponsesToChatConverter{}
+	return &ResponsesToChatConverter{
+		shouldStore: true, // default to storing
+	}
 }
 
 // SetReasoningSplit enables reasoning_split in the output ChatCompletionRequest.
@@ -39,6 +42,13 @@ func (c *ResponsesToChatConverter) CacheHit() bool {
 	return c.cacheHit
 }
 
+// SetStore controls whether to store the conversation.
+// Set to false when the request specifies store:false.
+// Default is true (conversations are stored).
+func (c *ResponsesToChatConverter) SetStore(store bool) {
+	c.shouldStore = store
+}
+
 // Convert transforms a ResponsesRequest body to ChatCompletionRequest format.
 func (c *ResponsesToChatConverter) Convert(body []byte) ([]byte, error) {
 	var req types.ResponsesRequest
@@ -51,15 +61,21 @@ func (c *ResponsesToChatConverter) Convert(body []byte) ([]byte, error) {
 }
 
 // convertRequest transforms a ResponsesRequest to ChatCompletionRequest.
-// When previous_response_id is provided, it walks the conversation chain
+// When previous_response_id is provided and store is true, it walks the conversation chain
 // from the store and prepends all history to the current input.
+// When store is false, it skips the DB chain walk and uses encrypted_reasoning directly.
 func (c *ResponsesToChatConverter) convertRequest(req *types.ResponsesRequest) *types.ChatCompletionRequest {
 	var reasoningItemID string
 
-	// Fetch conversation history chain if previous_response_id is provided
-	if req.PreviousResponseID != "" {
-		chain := conversation.WalkChainFromDefault(req.PreviousResponseID)
-		if len(chain) > 0 {
+	// Fetch conversation history chain if previous_response_id is provided and store is true
+	// In ZDR mode (store:false), we skip the DB chain walk and rely on encrypted_reasoning
+	if req.PreviousResponseID != "" && c.shouldStore {
+		// TODO: Wire userID from request headers for proper ownership validation
+		chain, err := conversation.WalkChainFromDefaultWithOwnership(req.PreviousResponseID, "")
+		if err != nil {
+			// Ownership error - return nil to trigger warning below
+			logging.InfoMsg("Warning: Conversation access denied: %s", err.Error())
+		} else if len(chain) > 0 {
 			// Mark cache hit
 			c.cacheHit = true
 			// Prepend all conversations in the chain (oldest first)
@@ -142,6 +158,12 @@ func (c *ResponsesToChatConverter) convertRequest(req *types.ResponsesRequest) *
 	// Pass reasoning_item_id to upstream for reasoning continuity across turns
 	if reasoningItemID != "" {
 		chatReq.ReasoningItemID = reasoningItemID
+	}
+
+	// Pass encrypted_reasoning through in ZDR mode
+	// When store:false and encrypted_reasoning is provided, forward it to upstream
+	if req.EncryptedReasoning != "" {
+		chatReq.EncryptedReasoning = req.EncryptedReasoning
 	}
 
 	// Convert metadata.user_id to user field
@@ -1111,4 +1133,16 @@ func (t *ResponsesToChatTransformer) Flush() error {
 // Close flushes and releases resources.
 func (t *ResponsesToChatTransformer) Close() error {
 	return t.Flush()
+}
+
+// Initialize prepares the transformer and emits initial events before upstream request.
+// For ResponsesToChatTransformer, this is a no-op as no initial events are needed.
+func (t *ResponsesToChatTransformer) Initialize() error {
+	return nil
+}
+
+// HandleCancel handles cancellation requests.
+// For ResponsesToChatTransformer, this is a no-op.
+func (t *ResponsesToChatTransformer) HandleCancel() error {
+	return nil
 }

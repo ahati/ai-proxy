@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -710,6 +711,99 @@ func TestMaxOutputTokens(t *testing.T) {
 
 	if got.MaxOutputTokens != 500 {
 		t.Errorf("MaxOutputTokens = %d, want 500", got.MaxOutputTokens)
+	}
+}
+
+// TestEncryptedReasoning tests ZDR mode encrypted reasoning field.
+func TestEncryptedReasoning(t *testing.T) {
+	tests := []struct {
+		name               string
+		encryptedReasoning string
+		store              *bool
+		wantInJSON         bool
+	}{
+		{
+			name:               "ZDR mode with encrypted reasoning",
+			encryptedReasoning: "encrypted_blob_abc123",
+			store:              boolPtr(false),
+			wantInJSON:         true,
+		},
+		{
+			name:               "normal mode without encrypted reasoning",
+			encryptedReasoning: "",
+			store:              boolPtr(true),
+			wantInJSON:         false,
+		},
+		{
+			name:               "ZDR mode without encrypted reasoning",
+			encryptedReasoning: "",
+			store:              boolPtr(false),
+			wantInJSON:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := ResponsesRequest{
+				Model:              "gpt-4o",
+				Input:              "Hello",
+				Store:              tt.store,
+				EncryptedReasoning: tt.encryptedReasoning,
+			}
+
+			data, err := json.Marshal(request)
+			if err != nil {
+				t.Fatalf("json.Marshal failed: %v", err)
+			}
+
+			// Check if encrypted_reasoning is in JSON when expected
+			hasEncryptedReasoning := strings.Contains(string(data), "encrypted_reasoning")
+			if hasEncryptedReasoning != tt.wantInJSON {
+				t.Errorf("encrypted_reasoning in JSON = %v, want %v", hasEncryptedReasoning, tt.wantInJSON)
+			}
+
+			// Test unmarshaling
+			var got ResponsesRequest
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("json.Unmarshal failed: %v", err)
+			}
+
+			if got.EncryptedReasoning != tt.encryptedReasoning {
+				t.Errorf("EncryptedReasoning = %s, want %s", got.EncryptedReasoning, tt.encryptedReasoning)
+			}
+		})
+	}
+}
+
+// TestEncryptedReasoningResponse tests encrypted reasoning in response.
+func TestEncryptedReasoningResponse(t *testing.T) {
+	response := ResponsesResponse{
+		ID:                 "resp_123abc",
+		Object:             "response",
+		CreatedAt:          1234567890,
+		Status:             "completed",
+		Model:              "gpt-4o",
+		Output:             []OutputItem{},
+		EncryptedReasoning: "encrypted_response_blob_xyz789",
+	}
+
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+
+	// Verify encrypted_reasoning is in JSON
+	if !strings.Contains(string(data), "encrypted_reasoning") {
+		t.Error("encrypted_reasoning should be in JSON")
+	}
+
+	var got ResponsesResponse
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("json.Unmarshal failed: %v", err)
+	}
+
+	if got.EncryptedReasoning != response.EncryptedReasoning {
+		t.Errorf("EncryptedReasoning = %s, want %s", got.EncryptedReasoning, response.EncryptedReasoning)
 	}
 }
 

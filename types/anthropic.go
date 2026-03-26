@@ -116,6 +116,9 @@ type Event struct {
 	// StopSequence is the custom stop sequence that triggered stop, if any.
 	// Only present when stop_reason is "stop_sequence".
 	StopSequence *string `json:"stop_sequence,omitempty"`
+	// EncryptedReasoning is returned by upstream in ZDR mode when store:false.
+	// This contains an encrypted blob that can be passed back on subsequent turns.
+	EncryptedReasoning string `json:"encrypted_reasoning,omitempty"`
 }
 
 // MessageInfo contains metadata about a message from the Anthropic API.

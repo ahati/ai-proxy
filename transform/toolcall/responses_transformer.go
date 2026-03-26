@@ -88,10 +88,17 @@ type ResponsesTransformer struct {
 	// previousResponseID stores the parent conversation ID for chain traversal
 	previousResponseID string
 
+	// userID is the owner of this conversation for access control
+	userID string
+
 	// reasoningSummaryMode controls how reasoning is summarized.
 	// Values: "" (no summary), "concise", "detailed"
 	// When set, the summarizer service is called to generate a summary.
 	reasoningSummaryMode string
+
+	// encryptedReasoning stores the encrypted reasoning blob from the request.
+	// Used in ZDR mode when store:false and encrypted_reasoning is provided.
+	encryptedReasoning string
 
 	// Tool call extraction from thinking content (for Kimi-style markup)
 	toolCallTransform bool // enabled by config
@@ -102,6 +109,9 @@ type ResponsesTransformer struct {
 
 	// ctx is the request context for cache status tracking
 	ctx context.Context
+
+	// stopReason tracks the stop reason from message_delta event
+	stopReason string
 }
 
 // ResponsesFormatter formats events in OpenAI Responses API format.
@@ -356,7 +366,7 @@ func (f *ResponsesFormatter) FormatOutputItemDone(itemID string, item map[string
 }
 
 // FormatResponseCompleted formats a response.completed event.
-func (f *ResponsesFormatter) FormatResponseCompleted(outputItems []map[string]interface{}, usage *Usage, sequenceNumber int) []byte {
+func (f *ResponsesFormatter) FormatResponseCompleted(outputItems []map[string]interface{}, usage *Usage, sequenceNumber int, encryptedReasoning string) []byte {
 	output := []interface{}{}
 	if len(outputItems) > 0 {
 		for _, item := range outputItems {
@@ -369,6 +379,11 @@ func (f *ResponsesFormatter) FormatResponseCompleted(outputItems []map[string]in
 		"model":  f.model,
 		"status": "completed",
 		"output": output,
+	}
+
+	// Include encrypted_reasoning in ZDR mode (store:false) or when received from upstream
+	if encryptedReasoning != "" {
+		response["encrypted_reasoning"] = encryptedReasoning
 	}
 
 	// Add usage if available
@@ -408,7 +423,61 @@ func (f *ResponsesFormatter) FormatResponseCompleted(outputItems []map[string]in
 	return []byte("data: " + string(data) + "\n\n")
 }
 
-// FormatReasoningItemAdded emits a response.output_item.added event for a reasoning item.
+// FormatResponseIncomplete formats a response.incomplete event.
+func (f *ResponsesFormatter) FormatResponseIncomplete(outputItems []map[string]interface{}, usage *Usage, sequenceNumber int, encryptedReasoning string, reason string) []byte {
+	output := []interface{}{}
+	if len(outputItems) > 0 {
+		for _, item := range outputItems {
+			output = append(output, item)
+		}
+	}
+	response := map[string]interface{}{
+		"id":     f.responseID,
+		"object": "response",
+		"model":  f.model,
+		"status": "incomplete",
+		"output": output,
+		"incomplete_details": map[string]interface{}{
+			"reason": reason,
+		},
+	}
+
+	// Include encrypted_reasoning in ZDR mode (store:false) or when received from upstream
+	if encryptedReasoning != "" {
+		response["encrypted_reasoning"] = encryptedReasoning
+	}
+
+	// Add usage if available
+	if usage != nil {
+		totalInputTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+		usageData := map[string]interface{}{
+			"input_tokens":  totalInputTokens,
+			"output_tokens": usage.OutputTokens,
+			"total_tokens":  totalInputTokens + usage.OutputTokens,
+		}
+		// Include cache token details if available (these are metadata, not additional tokens in OpenAI)
+		if usage.CacheReadInputTokens > 0 || usage.CacheCreationInputTokens > 0 {
+			details := map[string]interface{}{}
+			if usage.CacheReadInputTokens > 0 {
+				details["cached_tokens"] = usage.CacheReadInputTokens
+			}
+			if usage.CacheCreationInputTokens > 0 {
+				details["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
+			}
+			usageData["input_tokens_details"] = details
+		}
+		response["usage"] = usageData
+	}
+
+	event := map[string]interface{}{
+		"type":            "response.incomplete",
+		"sequence_number": sequenceNumber,
+		"response":        response,
+	}
+	data, _ := json.Marshal(event)
+	return []byte("data: " + string(data) + "\n\n")
+}
+
 // This signals the start of a reasoning output item in the streaming response.
 // The outputIndex is the 0-indexed position in the output array (always 0 for reasoning).
 func (f *ResponsesFormatter) FormatReasoningItemAdded(itemID string, outputIndex int, sequenceNumber int) []byte {
@@ -548,11 +617,23 @@ func (t *ResponsesTransformer) SetPreviousResponseID(id string) {
 	t.previousResponseID = id
 }
 
+// SetUserID sets the user ID for the conversation owner.
+// This is used for access control to prevent cross-user access to conversations.
+func (t *ResponsesTransformer) SetUserID(userID string) {
+	t.userID = userID
+}
+
 // SetReasoningSummaryMode sets the reasoning summary mode.
 // Values: "" (no summary), "concise", "detailed"
 // When set, the summarizer service is called to generate a summary of reasoning content.
 func (t *ResponsesTransformer) SetReasoningSummaryMode(mode string) {
 	t.reasoningSummaryMode = mode
+}
+
+// SetEncryptedReasoning sets the encrypted reasoning blob.
+// Used in ZDR mode when store:false and encrypted_reasoning is provided.
+func (t *ResponsesTransformer) SetEncryptedReasoning(encryptedReasoning string) {
+	t.encryptedReasoning = encryptedReasoning
 }
 
 // SetKimiToolCallTransform enables or disables tool call extraction from thinking content.
@@ -638,18 +719,6 @@ func (t *ResponsesTransformer) handleMessageStart(event types.Event) error {
 				CacheCreationInputTokens: event.Message.Usage.CacheCreationInputTokens,
 			}
 		}
-	}
-
-	// Send response.created event
-	seqNum := t.nextSequenceNumber()
-	if err := t.write(t.formatter.FormatResponseCreated(seqNum)); err != nil {
-		return err
-	}
-
-	// Send response.in_progress event
-	seqNum = t.nextSequenceNumber()
-	if err := t.write(t.formatter.FormatResponseInProgress(seqNum)); err != nil {
-		return err
 	}
 
 	// Create the message item but don't emit it yet - we need to know the output_index
@@ -1021,8 +1090,16 @@ func (t *ResponsesTransformer) handleMessageDelta(event types.Event) error {
 		}
 	}
 
+	// Capture encrypted_reasoning from upstream (for ZDR mode)
+	if event.EncryptedReasoning != "" {
+		t.encryptedReasoning = event.EncryptedReasoning
+	}
+
 	// Handle stop_reason - convert Anthropic stop_reason to Responses API format
 	if event.StopReason != "" {
+		// Store stop reason for later use in response completion
+		t.stopReason = event.StopReason
+
 		// Map Anthropic stop_reason to appropriate Responses API output
 		// Anthropic: "end_turn", "max_tokens", "stop_sequence", "tool_use"
 		switch event.StopReason {
@@ -1071,14 +1148,23 @@ func (t *ResponsesTransformer) handleMessageStop(event types.Event) error {
 		t.outputItems = append(t.outputItems, t.currentItem)
 	}
 
-	// Send response.completed event with populated output and usage
-	seqNum := t.nextSequenceNumber()
-	if err := t.write(t.formatter.FormatResponseCompleted(t.outputItems, t.usage, seqNum)); err != nil {
-		return err
-	}
-
 	// Store conversation for previous_response_id support
+	// MUST happen BEFORE emitting response.completed to avoid race condition
 	t.storeConversation()
+
+	// Send response event based on stop reason
+	seqNum := t.nextSequenceNumber()
+	if t.stopReason == "max_tokens" {
+		// Emit response.incomplete for max_tokens stop reason
+		if err := t.write(t.formatter.FormatResponseIncomplete(t.outputItems, t.usage, seqNum, t.encryptedReasoning, "max_output_tokens")); err != nil {
+			return err
+		}
+	} else {
+		// Emit response.completed for normal completion
+		if err := t.write(t.formatter.FormatResponseCompleted(t.outputItems, t.usage, seqNum, t.encryptedReasoning)); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -1116,6 +1202,7 @@ func (t *ResponsesTransformer) storeConversation() {
 	conv := &conversation.Conversation{
 		ID:                 t.responseID,
 		PreviousResponseID: t.previousResponseID,
+		UserID:             t.userID,
 		Input:              t.inputItems,
 		Output:             outputItems,
 		ReasoningItemID:    reasoningItemID,
@@ -1200,6 +1287,81 @@ func (t *ResponsesTransformer) Close() error {
 	return t.Flush()
 }
 
+// HandleCancel handles cancellation requests.
+// Flushes any buffered reasoning content and emits response.cancelled event.
+func (t *ResponsesTransformer) HandleCancel() error {
+	// Flush any buffered reasoning content if in reasoning and has content
+	if t.inReasoning && t.reasoningContent.Len() > 0 {
+		summary := t.reasoningContent.String()
+		reasoningID := t.getReasoningID()
+		outputIdx := t.reasoningOutputIndex
+
+		// Emit response.reasoning_summary_text.done
+		seqNum := t.nextSequenceNumber()
+		if err := t.write(t.formatter.FormatReasoningSummaryTextDone(reasoningID, summary, outputIdx, t.summaryIndex, seqNum)); err != nil {
+			return err
+		}
+
+		// Emit response.reasoning_summary_part.done
+		seqNum = t.nextSequenceNumber()
+		if err := t.write(t.formatter.FormatReasoningSummaryPartDone(reasoningID, summary, outputIdx, t.summaryIndex, seqNum)); err != nil {
+			return err
+		}
+
+		// Emit response.output_item.done
+		seqNum = t.nextSequenceNumber()
+		if err := t.write(t.formatter.FormatReasoningItemDone(reasoningID, summary, outputIdx, seqNum)); err != nil {
+			return err
+		}
+
+		// Track reasoning item in output items
+		reasoningItem := map[string]interface{}{
+			"type": "reasoning",
+			"id":   reasoningID,
+			"summary": []map[string]interface{}{
+				{"type": "summary_text", "text": summary},
+			},
+		}
+		t.outputItems = append(t.outputItems, reasoningItem)
+		t.inReasoning = false
+	}
+
+	// Flush any in-progress tool calls
+	if t.inToolCall {
+		args := t.toolArgs.String()
+		toolItem := map[string]interface{}{
+			"type":      "function_call",
+			"id":        t.currentID,
+			"call_id":   t.currentID,
+			"name":      t.currentToolName,
+			"arguments": args,
+		}
+		t.outputItems = append(t.outputItems, toolItem)
+
+		seqNum := t.nextSequenceNumber()
+		if err := t.write(t.formatter.FormatFunctionCallItemDone(t.currentID, t.currentToolName, args, t.toolCallOutputIndex, seqNum)); err != nil {
+			return err
+		}
+		t.inToolCall = false
+	}
+
+	// Emit response.cancelled event
+	seqNum := t.nextSequenceNumber()
+	event := map[string]interface{}{
+		"type":            "response.cancelled",
+		"sequence_number": seqNum,
+		"response": map[string]interface{}{
+			"id":     t.responseID,
+			"object": "response",
+			"model":  t.model,
+			"status": "cancelled",
+			"output": t.outputItems,
+		},
+	}
+	data, _ := json.Marshal(event)
+	return t.write([]byte("data: " + string(data) + "\n\n"))
+}
+
 // EmitError sends a response.failed event for stream errors.
 // This notifies clients when the stream terminates unexpectedly.
 func (t *ResponsesTransformer) EmitError(streamErr error) error {
@@ -1224,4 +1386,35 @@ func (t *ResponsesTransformer) EmitError(streamErr error) error {
 
 	data, _ := json.Marshal(event)
 	return t.sseWriter.WriteData(data)
+}
+
+// generateResponseID generates a unique response ID.
+func generateResponseID() string {
+	return fmt.Sprintf("resp_%d", time.Now().UnixMilli())
+}
+
+// Initialize prepares the transformer and emits response.created before upstream request.
+// Per the spec, response.created must be emitted BEFORE the upstream call starts.
+func (t *ResponsesTransformer) Initialize() error {
+	// Generate response ID if not set
+	if t.responseID == "" {
+		t.responseID = generateResponseID()
+		t.formatter.SetResponseID(t.responseID)
+	}
+
+	// Emit response.created
+	seqNum := t.nextSequenceNumber()
+	if err := t.write(t.formatter.FormatResponseCreated(seqNum)); err != nil {
+		return err
+	}
+
+	// Emit response.in_progress
+	seqNum = t.nextSequenceNumber()
+	return t.write(t.formatter.FormatResponseInProgress(seqNum))
+}
+
+// GetResponseID returns the response ID for stream registration.
+// Implements transform.ResponseIDGetter interface.
+func (t *ResponsesTransformer) GetResponseID() string {
+	return t.responseID
 }

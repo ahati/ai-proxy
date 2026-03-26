@@ -23,7 +23,7 @@ func TestResponseCancelHandler_Handle_Success(t *testing.T) {
 
 	// Register a mock stream
 	_, cancel := context.WithCancel(context.Background())
-	registry.Register("resp_cancel_test", cancel)
+	registry.Register("resp_cancel_test", cancel, nil)
 
 	router := gin.New()
 	router.POST("/v1/responses/:id/cancel", NewResponseCancelHandler())

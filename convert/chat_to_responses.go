@@ -254,6 +254,11 @@ func extractContentString(content interface{}) string {
 // Chat Completions → Responses — Streaming
 // ─────────────────────────────────────────────────────────────────────────────
 
+// generateChatResponseID generates a unique response ID for chat completions.
+func generateChatResponseID() string {
+	return fmt.Sprintf("resp_%d", time.Now().UnixMilli())
+}
+
 type ChatToResponsesTransformer struct {
 	w io.Writer
 
@@ -296,6 +301,10 @@ type ChatToResponsesTransformer struct {
 	// When set, the summarizer service is called to generate a summary.
 	reasoningSummaryMode string
 
+	// encryptedReasoning stores the encrypted reasoning blob from the request.
+	// Used in ZDR mode when store:false and encrypted_reasoning is provided.
+	encryptedReasoning string
+
 	// Tool call extraction from reasoning content (for Kimi-style markup)
 	toolCallTransform bool             // enabled by config
 	parser            *toolcall.Parser // parser for tool call markup
@@ -309,6 +318,9 @@ type ChatToResponsesTransformer struct {
 
 	// ctx is the request context for cache status tracking
 	ctx context.Context
+
+	// userID stores the user ID for conversation storage
+	userID string
 }
 
 type chatToRespToolCallState struct {
@@ -355,6 +367,12 @@ func (t *ChatToResponsesTransformer) SetReasoningSummaryMode(mode string) {
 	t.reasoningSummaryMode = mode
 }
 
+// SetEncryptedReasoning sets the encrypted reasoning blob.
+// Used in ZDR mode when store:false and encrypted_reasoning is provided.
+func (t *ChatToResponsesTransformer) SetEncryptedReasoning(encryptedReasoning string) {
+	t.encryptedReasoning = encryptedReasoning
+}
+
 // SetKimiToolCallTransform enables or disables tool call extraction from reasoning content.
 // When enabled, the transformer will parse Kimi-style tool call markup in reasoning text
 // and emit proper function_call output items.
@@ -373,6 +391,53 @@ func (t *ChatToResponsesTransformer) SetGLM5ToolCallTransform(enabled bool) {
 // When a conversation is stored, the cache-created status is set in the capture context.
 func (t *ChatToResponsesTransformer) SetContext(ctx context.Context) {
 	t.ctx = ctx
+}
+
+// SetUserID sets the user ID for conversation storage.
+// This is used to associate conversations with a specific user.
+func (t *ChatToResponsesTransformer) SetUserID(userID string) {
+	t.userID = userID
+}
+
+// Initialize prepares the transformer and emits response.created before upstream request.
+// Per the spec, response.created must be emitted BEFORE the upstream call starts.
+func (t *ChatToResponsesTransformer) Initialize() error {
+	// Generate response ID if not set
+	if t.responseID == "" {
+		t.responseID = generateChatResponseID()
+	}
+
+	// Emit response.created
+	event := map[string]interface{}{
+		"type":            "response.created",
+		"sequence_number": t.nextSeq(),
+		"response": map[string]interface{}{
+			"id":         t.responseID,
+			"object":     "response",
+			"created_at": t.created,
+			"model":      t.model,
+			"status":     "in_progress",
+			"output":     []interface{}{},
+		},
+	}
+	if err := t.writeEvent(event); err != nil {
+		return err
+	}
+
+	// Emit response.in_progress
+	inProgressEvent := map[string]interface{}{
+		"type":            "response.in_progress",
+		"sequence_number": t.nextSeq(),
+		"response": map[string]interface{}{
+			"id":         t.responseID,
+			"object":     "response",
+			"created_at": t.created,
+			"model":      t.model,
+			"status":     "in_progress",
+			"output":     []interface{}{},
+		},
+	}
+	return t.writeEvent(inProgressEvent)
 }
 
 func (t *ChatToResponsesTransformer) nextSeq() int {
@@ -398,26 +463,27 @@ func (t *ChatToResponsesTransformer) Transform(event *sse.Event) error {
 }
 
 func (t *ChatToResponsesTransformer) handleChunk(chunk *types.Chunk) error {
+	// Set response ID and model from first chunk if not already set
+	// Note: response.created is already emitted in Initialize() before upstream call
 	if t.responseID == "" && chunk.ID != "" {
 		t.responseID = "resp_" + chunk.ID
 		t.model = chunk.Model
-		if err := t.emitResponseCreated(); err != nil {
-			return err
-		}
 	}
 
-	// Ensure response.created is emitted before any content
+	// Ensure we have a response ID (fallback if Initialize wasn't called)
 	if t.responseID == "" {
 		t.responseID = fmt.Sprintf("resp_%d", t.created)
 		t.model = chunk.Model
-		if err := t.emitResponseCreated(); err != nil {
-			return err
-		}
 	}
 
 	// Capture usage when available (may come after finish_reason in separate chunk)
 	if chunk.Usage != nil {
 		t.usage = chunk.Usage
+	}
+
+	// Capture encrypted_reasoning from upstream (for ZDR mode)
+	if chunk.EncryptedReasoning != "" {
+		t.encryptedReasoning = chunk.EncryptedReasoning
 	}
 
 	// Handle finish reason - store it, emit response.completed after usage arrives or at [DONE]
@@ -476,35 +542,6 @@ func (t *ChatToResponsesTransformer) handleChunk(chunk *types.Chunk) error {
 	}
 
 	return nil
-}
-
-func (t *ChatToResponsesTransformer) emitResponseCreated() error {
-	resp := map[string]interface{}{
-		"id":         t.responseID,
-		"object":     "response",
-		"created_at": t.created,
-		"model":      t.model,
-		"status":     "in_progress",
-		"output":     []interface{}{},
-	}
-
-	// Emit response.created
-	createdEvent := map[string]interface{}{
-		"type":            "response.created",
-		"sequence_number": t.nextSeq(),
-		"response":        resp,
-	}
-	if err := t.writeEvent(createdEvent); err != nil {
-		return err
-	}
-
-	// Emit response.in_progress
-	inProgressEvent := map[string]interface{}{
-		"type":            "response.in_progress",
-		"sequence_number": t.nextSeq(),
-		"response":        resp,
-	}
-	return t.writeEvent(inProgressEvent)
 }
 
 func (t *ChatToResponsesTransformer) emitTextDelta(text string) error {
@@ -1007,12 +1044,34 @@ func (t *ChatToResponsesTransformer) handleFinish() error {
 		outputItems = append(outputItems, tc)
 	}
 
+	// Determine response status based on finish reason
+	status := "completed"
+	eventType := "response.completed"
+	var incompleteDetails map[string]interface{}
+	if t.finishReason == "length" {
+		status = "incomplete"
+		eventType = "response.incomplete"
+		incompleteDetails = map[string]interface{}{
+			"reason": "max_output_tokens",
+		}
+	}
+
 	response := map[string]interface{}{
 		"id":     t.responseID,
 		"object": "response",
 		"model":  t.model,
-		"status": "completed",
+		"status": status,
 		"output": outputItems,
+	}
+
+	// Add incomplete_details if applicable
+	if incompleteDetails != nil {
+		response["incomplete_details"] = incompleteDetails
+	}
+
+	// Include encrypted_reasoning in ZDR mode (store:false) or when received from upstream
+	if t.encryptedReasoning != "" {
+		response["encrypted_reasoning"] = t.encryptedReasoning
 	}
 
 	if t.usage != nil {
@@ -1041,7 +1100,7 @@ func (t *ChatToResponsesTransformer) handleFinish() error {
 	}
 
 	event := map[string]interface{}{
-		"type":            "response.completed",
+		"type":            eventType,
 		"sequence_number": t.nextSeq(),
 		"response":        response,
 	}
@@ -1051,6 +1110,7 @@ func (t *ChatToResponsesTransformer) handleFinish() error {
 	t.completed = true
 
 	// Store conversation for previous_response_id support
+	// MUST happen BEFORE emitting response.completed to avoid race condition
 	t.storeConversation(outputItems)
 
 	return nil
@@ -1089,6 +1149,7 @@ func (t *ChatToResponsesTransformer) storeConversation(outputItems []map[string]
 	conv := &conversation.Conversation{
 		ID:                 t.responseID,
 		PreviousResponseID: t.previousResponseID,
+		UserID:             t.userID,
 		Input:              t.inputItems,
 		Output:             outputs,
 		ReasoningItemID:    reasoningItemID,
@@ -1219,6 +1280,18 @@ func (t *ChatToResponsesTransformer) Close() error {
 	}
 
 	return t.Flush()
+}
+
+// HandleCancel handles cancellation requests.
+// For ChatToResponsesTransformer, this is a no-op.
+func (t *ChatToResponsesTransformer) HandleCancel() error {
+	return nil
+}
+
+// GetResponseID returns the response ID for stream registration.
+// Implements transform.ResponseIDGetter interface.
+func (t *ChatToResponsesTransformer) GetResponseID() string {
+	return t.responseID
 }
 
 // EmitError sends a response.failed event for stream errors.

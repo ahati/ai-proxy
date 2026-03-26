@@ -5,8 +5,22 @@ Go-based HTTP proxy for LLM APIs with OpenAI and Anthropic compatibility.
 ## Build Commands
 
 ```bash
-# Build and run (requires config file)
-go build -o ai-proxy . && ./ai-proxy --config-file config.json
+# Build (includes llama.cpp for summarizer module)
+# Uses ninja if available, falls back to make
+# Caches llama.cpp in Go build cache tied to summarizer version
+make build
+
+# Build with specific llama.cpp version
+LLAMA_VERSION=b5508 make build
+
+# Clean binary only
+make clean
+
+# Clean llama.cpp cache (rebuilds on next build)
+make clean-cache
+
+# Or clear entire Go build cache (also clears llama.cpp)
+go clean -cache
 
 # Run tests
 go test ./...
@@ -19,6 +33,14 @@ go fmt ./...
 go vet ./...
 go mod tidy
 ```
+
+### Build Cache
+
+llama.cpp is cached at `.build/llama-cpp-<summarizer-version>/` (gitignored).
+- First build: ~2 minutes to compile llama.cpp
+- Subsequent builds: instant (uses cached libraries)
+- Cache is versioned by summarizer module - upgrading summarizer triggers rebuild
+- Clean with `make clean-cache` or `rm -rf .build`
 
 ## Code Style Guidelines
 
@@ -190,4 +212,4 @@ func TestFunctionName_Scenario(t *testing.T) {
 
 - Do NOT commit unless explicitly asked
 - Run `go vet ./...` and `go fmt ./...` before commits
-- Ensure build passes: `go build ./...`
+- Ensure build passes: `make build`

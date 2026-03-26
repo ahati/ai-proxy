@@ -9,10 +9,17 @@ import (
 )
 
 type mockSSETransformer struct {
-	transformErr error
-	flushErr     error
-	closeErr     error
-	events       []*sse.Event
+	transformErr   error
+	flushErr       error
+	closeErr       error
+	initializeErr  error
+	events         []*sse.Event
+	initialized    bool
+}
+
+func (m *mockSSETransformer) Initialize() error {
+	m.initialized = true
+	return m.initializeErr
 }
 
 func (m *mockSSETransformer) Transform(event *sse.Event) error {
@@ -26,6 +33,10 @@ func (m *mockSSETransformer) Flush() error {
 
 func (m *mockSSETransformer) Close() error {
 	return m.closeErr
+}
+
+func (m *mockSSETransformer) HandleCancel() error {
+	return nil
 }
 
 type mockFlushingWriter struct {
@@ -44,6 +55,33 @@ func (m *mockFlushingWriter) Flush() error {
 
 func TestSSETransformer_Interface(t *testing.T) {
 	var _ SSETransformer = &mockSSETransformer{}
+}
+
+func TestSSETransformer_Initialize(t *testing.T) {
+	tests := []struct {
+		name          string
+		initializeErr error
+	}{
+		{"successful initialize", nil},
+		{"initialize error", errors.New("initialize failed")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &mockSSETransformer{initializeErr: tt.initializeErr}
+			err := mock.Initialize()
+
+			if tt.initializeErr != nil && err == nil {
+				t.Errorf("Initialize() expected error, got nil")
+			}
+			if tt.initializeErr == nil && err != nil {
+				t.Errorf("Initialize() unexpected error: %v", err)
+			}
+			if !mock.initialized {
+				t.Error("Initialize() should set initialized flag")
+			}
+		})
+	}
 }
 
 func TestFlushingWriter_Interface(t *testing.T) {

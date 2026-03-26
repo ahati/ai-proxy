@@ -97,6 +97,11 @@ func TestResponsesHandler_ValidateRequest(t *testing.T) {
 			body:      `{"model":"unknown-model","input":"Hello"}`,
 			wantError: true,
 		},
+		{
+			name:      "encrypted_reasoning within limit",
+			body:      `{"model":"gpt-4o","input":"Hello","encrypted_reasoning":"` + strings.Repeat("a", 100) + `"}`,
+			wantError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -113,6 +118,67 @@ func TestResponsesHandler_ValidateRequest(t *testing.T) {
 			}
 			if !tt.wantError && err != nil {
 				t.Errorf("Expected no error but got: %v", err)
+			}
+		})
+	}
+}
+
+// TestResponsesHandler_ValidateRequest_EncryptedReasoningSize tests that encrypted_reasoning
+// blob size validation prevents memory exhaustion attacks.
+func TestResponsesHandler_ValidateRequest_EncryptedReasoningSize(t *testing.T) {
+	mockR := newMockRouter()
+	mockR.models["gpt-4o"] = &router.ResolvedRoute{
+		Provider: config.Provider{
+			Name:      "openai",
+			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+		},
+		Model:          "gpt-4o",
+		OutputProtocol: "openai",
+	}
+
+	tests := []struct {
+		name      string
+		body      string
+		wantError bool
+		errorMsg  string
+	}{
+		{
+			name:      "encrypted_reasoning within limit",
+			body:      `{"model":"gpt-4o","input":"Hello","encrypted_reasoning":"` + strings.Repeat("a", 100) + `"}`,
+			wantError: false,
+		},
+		{
+			name:      "encrypted_reasoning exactly at 1MB limit",
+			body:      `{"model":"gpt-4o","input":"Hello","encrypted_reasoning":"` + strings.Repeat("a", 1024*1024) + `"}`,
+			wantError: false,
+		},
+		{
+			name:      "encrypted_reasoning exceeds 1MB limit",
+			body:      `{"model":"gpt-4o","input":"Hello","encrypted_reasoning":"` + strings.Repeat("a", 1024*1024+1) + `"}`,
+			wantError: true,
+			errorMsg:  "encrypted_reasoning exceeds maximum size",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := &ResponsesHandler{
+				cfg:    &config.Config{},
+				router: mockR,
+			}
+
+			err := handler.ValidateRequest([]byte(tt.body))
+
+			if tt.wantError {
+				if err == nil {
+					t.Error("Expected error but got nil")
+				} else if tt.errorMsg != "" && !strings.Contains(err.Error(), tt.errorMsg) {
+					t.Errorf("Expected error containing %q, got %q", tt.errorMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Expected no error but got: %v", err)
+				}
 			}
 		})
 	}
@@ -540,5 +606,73 @@ func BenchmarkResponsesHandler_TransformRequest_Anthropic(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// TestResponsesHandler_EncryptedReasoning tests extraction of encrypted reasoning in ZDR mode.
+func TestResponsesHandler_EncryptedReasoning(t *testing.T) {
+	mockR := newMockRouter()
+	mockR.models["gpt-4o"] = &router.ResolvedRoute{
+		Provider: config.Provider{
+			Name:      "openai",
+			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+		},
+		Model:          "gpt-4o",
+		OutputProtocol: "openai",
+	}
+
+	handler := &ResponsesHandler{
+		cfg:    &config.Config{},
+		router: mockR,
+	}
+
+	// Test with encrypted reasoning in ZDR mode
+	body := `{"model":"gpt-4o","input":"Hello","store":false,"encrypted_reasoning":"encrypted_blob_abc123"}`
+	err := handler.ValidateRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("ValidateRequest failed: %v", err)
+	}
+
+	if handler.encryptedReasoning != "encrypted_blob_abc123" {
+		t.Errorf("encryptedReasoning = %s, want encrypted_blob_abc123", handler.encryptedReasoning)
+	}
+
+	// Verify store is false
+	if handler.shouldStore {
+		t.Error("shouldStore should be false when store:false")
+	}
+}
+
+// TestResponsesHandler_NoEncryptedReasoning tests normal mode without encrypted reasoning.
+func TestResponsesHandler_NoEncryptedReasoning(t *testing.T) {
+	mockR := newMockRouter()
+	mockR.models["gpt-4o"] = &router.ResolvedRoute{
+		Provider: config.Provider{
+			Name:      "openai",
+			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+		},
+		Model:          "gpt-4o",
+		OutputProtocol: "openai",
+	}
+
+	handler := &ResponsesHandler{
+		cfg:    &config.Config{},
+		router: mockR,
+	}
+
+	// Test without encrypted reasoning
+	body := `{"model":"gpt-4o","input":"Hello","store":true}`
+	err := handler.ValidateRequest([]byte(body))
+	if err != nil {
+		t.Fatalf("ValidateRequest failed: %v", err)
+	}
+
+	if handler.encryptedReasoning != "" {
+		t.Errorf("encryptedReasoning = %s, want empty string", handler.encryptedReasoning)
+	}
+
+	// Verify store is true
+	if !handler.shouldStore {
+		t.Error("shouldStore should be true when store:true")
 	}
 }

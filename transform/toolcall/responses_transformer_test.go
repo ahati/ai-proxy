@@ -243,7 +243,7 @@ func TestResponsesFormatter_FormatResponseCompleted(t *testing.T) {
 		}},
 	}}
 
-	result := formatter.FormatResponseCompleted(outputItems, nil, 1)
+	result := formatter.FormatResponseCompleted(outputItems, nil, 1, "")
 	resultStr := string(result)
 
 	if !strings.Contains(resultStr, `"type":"response.completed"`) {
@@ -511,6 +511,11 @@ func TestResponsesTransformer_HandleMessageStart(t *testing.T) {
 	var buf bytes.Buffer
 	transformer := NewResponsesTransformer(&buf)
 
+	err := transformer.Initialize()
+	if err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
 	anthropicEvent := types.Event{
 		Type: "message_start",
 		Message: &types.MessageInfo{
@@ -523,7 +528,7 @@ func TestResponsesTransformer_HandleMessageStart(t *testing.T) {
 
 	data, _ := json.Marshal(anthropicEvent)
 	event := &sse.Event{Data: string(data)}
-	err := transformer.Transform(event)
+	err = transformer.Transform(event)
 
 	if err != nil {
 		t.Errorf("Transform returned error: %v", err)
@@ -534,13 +539,8 @@ func TestResponsesTransformer_HandleMessageStart(t *testing.T) {
 		t.Error("Result should contain response.created event")
 	}
 
-	if !strings.Contains(result, `"id":"resp_abc123"`) {
-		t.Error("Result should contain converted response ID")
-	}
-
-	if !strings.Contains(result, `"model":"claude-3-opus"`) {
-		t.Error("Result should contain model")
-	}
+	// response.created and response.in_progress are emitted by Initialize()
+	// with a generated response ID and empty model (model is set later by message_start)
 }
 
 // TestResponsesTransformer_HandleContentBlockStart_Text tests text block start.
@@ -1070,6 +1070,11 @@ func TestResponsesTransformer_Close(t *testing.T) {
 func TestResponsesTransformer_FullFlow(t *testing.T) {
 	var buf bytes.Buffer
 	transformer := NewResponsesTransformer(&buf)
+
+	err := transformer.Initialize()
+	if err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
 
 	events := []types.Event{
 		{
@@ -1992,5 +1997,440 @@ func TestResponsesTransformer_ToolCallsInThinkingContent(t *testing.T) {
 				tt.validate(t, output)
 			}
 		})
+	}
+}
+
+// ============================================================================
+// HandleCancel Tests
+// ============================================================================
+
+// TestResponsesTransformer_HandleCancel_WithBufferedReasoning tests HandleCancel with buffered reasoning content.
+func TestResponsesTransformer_HandleCancel_WithBufferedReasoning(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup: send message_start
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Start a thinking block
+	contentBlock := types.ContentBlock{Type: "thinking"}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Send some thinking content
+	delta := types.ThinkingDelta{Type: "thinking_delta", Thinking: "Analyzing the request..."}
+	deltaData, _ := json.Marshal(delta)
+	blockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(0),
+		Delta: deltaData,
+	}
+	data, _ = json.Marshal(blockDelta)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	buf.Reset()
+
+	// Call HandleCancel
+	err := transformer.HandleCancel()
+	if err != nil {
+		t.Errorf("HandleCancel returned error: %v", err)
+	}
+
+	result := buf.String()
+
+	// Should contain response.reasoning_summary_text.done
+	if !strings.Contains(result, `"type":"response.reasoning_summary_text.done"`) {
+		t.Error("Result should contain response.reasoning_summary_text.done")
+	}
+
+	// Should contain response.reasoning_summary_part.done
+	if !strings.Contains(result, `"type":"response.reasoning_summary_part.done"`) {
+		t.Error("Result should contain response.reasoning_summary_part.done")
+	}
+
+	// Should contain response.output_item.done for reasoning
+	if !strings.Contains(result, `"type":"response.output_item.done"`) {
+		t.Error("Result should contain response.output_item.done")
+	}
+
+	// Should contain reasoning type in output
+	if !strings.Contains(result, `"type":"reasoning"`) {
+		t.Error("Result should contain reasoning item type")
+	}
+
+	// Should contain the reasoning text
+	if !strings.Contains(result, `"text":"Analyzing the request..."`) {
+		t.Error("Result should contain reasoning text")
+	}
+
+	// Should contain response.cancelled
+	if !strings.Contains(result, `"type":"response.cancelled"`) {
+		t.Error("Result should contain response.cancelled")
+	}
+
+	// Should contain status: cancelled
+	if !strings.Contains(result, `"status":"cancelled"`) {
+		t.Error("Result should contain status: cancelled")
+	}
+}
+
+// TestResponsesTransformer_HandleCancel_WithInProgressToolCall tests HandleCancel with in-progress tool call.
+func TestResponsesTransformer_HandleCancel_WithInProgressToolCall(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup: send message_start
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Start a tool_use block
+	contentBlock := types.ContentBlock{
+		Type: "tool_use",
+		ID:   "toolu_123",
+		Name: "get_weather",
+	}
+	blockData, _ := json.Marshal(contentBlock)
+	blockStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: blockData,
+	}
+	data, _ = json.Marshal(blockStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Send partial tool arguments
+	delta := types.InputJSONDelta{Type: "input_json_delta", PartialJSON: `{"location": "S`}
+	deltaData, _ := json.Marshal(delta)
+	blockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(0),
+		Delta: deltaData,
+	}
+	data, _ = json.Marshal(blockDelta)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	buf.Reset()
+
+	// Call HandleCancel
+	err := transformer.HandleCancel()
+	if err != nil {
+		t.Errorf("HandleCancel returned error: %v", err)
+	}
+
+	result := buf.String()
+
+	// Should contain response.output_item.done for function_call
+	if !strings.Contains(result, `"type":"response.output_item.done"`) {
+		t.Error("Result should contain response.output_item.done")
+	}
+
+	// Should contain function_call type
+	if !strings.Contains(result, `"type":"function_call"`) {
+		t.Error("Result should contain function_call item type")
+	}
+
+	// Should contain the tool ID
+	if !strings.Contains(result, `"id":"toolu_123"`) {
+		t.Error("Result should contain tool ID")
+	}
+
+	// Should contain the function name
+	if !strings.Contains(result, `"name":"get_weather"`) {
+		t.Error("Result should contain function name")
+	}
+
+	// Should contain the partial arguments
+	if !strings.Contains(result, `"arguments"`) {
+		t.Error("Result should contain arguments field")
+	}
+
+	// Should contain response.cancelled
+	if !strings.Contains(result, `"type":"response.cancelled"`) {
+		t.Error("Result should contain response.cancelled")
+	}
+}
+
+// TestResponsesTransformer_HandleCancel_WithReasoningAndToolCall tests HandleCancel with both reasoning and tool call.
+func TestResponsesTransformer_HandleCancel_WithReasoningAndToolCall(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup: send message_start
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Start a thinking block
+	thinkingBlock := types.ContentBlock{Type: "thinking"}
+	thinkingData, _ := json.Marshal(thinkingBlock)
+	thinkingStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(0),
+		ContentBlock: thinkingData,
+	}
+	data, _ = json.Marshal(thinkingStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Send thinking content
+	delta := types.ThinkingDelta{Type: "thinking_delta", Thinking: "Need to check weather"}
+	deltaData, _ := json.Marshal(delta)
+	blockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(0),
+		Delta: deltaData,
+	}
+	data, _ = json.Marshal(blockDelta)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Start a tool_use block (this will finalize the reasoning)
+	toolBlock := types.ContentBlock{
+		Type: "tool_use",
+		ID:   "toolu_456",
+		Name: "get_weather",
+	}
+	toolData, _ := json.Marshal(toolBlock)
+	toolStart := types.Event{
+		Type:         "content_block_start",
+		Index:        intPtr(1),
+		ContentBlock: toolData,
+	}
+	data, _ = json.Marshal(toolStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	// Send partial tool arguments
+	toolDelta := types.InputJSONDelta{Type: "input_json_delta", PartialJSON: `{"city":`}
+	toolDeltaData, _ := json.Marshal(toolDelta)
+	toolBlockDelta := types.Event{
+		Type:  "content_block_delta",
+		Index: intPtr(1),
+		Delta: toolDeltaData,
+	}
+	data, _ = json.Marshal(toolBlockDelta)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	buf.Reset()
+
+	// Call HandleCancel
+	err := transformer.HandleCancel()
+	if err != nil {
+		t.Errorf("HandleCancel returned error: %v", err)
+	}
+
+	result := buf.String()
+
+	// Should contain function_call type (from the in-progress tool call)
+	if !strings.Contains(result, `"type":"function_call"`) {
+		t.Error("Result should contain function_call item type")
+	}
+
+	// Should contain response.cancelled
+	if !strings.Contains(result, `"type":"response.cancelled"`) {
+		t.Error("Result should contain response.cancelled")
+	}
+
+	// Should have output with both items (reasoning was finalized when tool started)
+	if !strings.Contains(result, `"output"`) {
+		t.Error("Result should contain output field")
+	}
+}
+
+// TestResponsesTransformer_HandleCancel_EmptyState tests HandleCancel with empty state.
+func TestResponsesTransformer_HandleCancel_EmptyState(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	// Setup: send message_start to set response ID
+	msgStart := types.Event{
+		Type: "message_start",
+		Message: &types.MessageInfo{
+			ID:    "msg_abc",
+			Model: "claude-3",
+		},
+	}
+	data, _ := json.Marshal(msgStart)
+	transformer.Transform(&sse.Event{Data: string(data)})
+
+	buf.Reset()
+
+	// Call HandleCancel without any content
+	err := transformer.HandleCancel()
+	if err != nil {
+		t.Errorf("HandleCancel returned error: %v", err)
+	}
+
+	result := buf.String()
+
+	// Should still contain response.cancelled
+	if !strings.Contains(result, `"type":"response.cancelled"`) {
+		t.Error("Result should contain response.cancelled")
+	}
+
+	// Should have empty output
+	if !strings.Contains(result, `"output":[]`) {
+		t.Error("Result should have empty output array")
+	}
+
+	// Should contain status: cancelled
+	if !strings.Contains(result, `"status":"cancelled"`) {
+		t.Error("Result should contain status: cancelled")
+	}
+}
+
+// ============================================================================
+// Incomplete Response Tests
+// ============================================================================
+
+// TestResponsesTransformer_MaxTokensStopReason tests that stop_reason:"max_tokens" produces response.incomplete.
+func TestResponsesTransformer_MaxTokensStopReason(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	events := []types.Event{
+		{
+			Type: "message_start",
+			Message: &types.MessageInfo{
+				ID:    "msg_abc",
+				Model: "claude-3",
+			},
+		},
+		{
+			Type:         "content_block_start",
+			Index:        intPtr(0),
+			ContentBlock: mustMarshal(types.ContentBlock{Type: "text"}),
+		},
+		{
+			Type:  "content_block_delta",
+			Index: intPtr(0),
+			Delta: mustMarshal(types.TextDelta{Type: "text_delta", Text: "Hello"}),
+		},
+		{
+			Type:  "content_block_stop",
+			Index: intPtr(0),
+		},
+		{
+			Type:       "message_delta",
+			StopReason: "max_tokens",
+		},
+		{
+			Type: "message_stop",
+		},
+	}
+
+	for _, e := range events {
+		data, _ := json.Marshal(e)
+		err := transformer.Transform(&sse.Event{Data: string(data)})
+		if err != nil {
+			t.Errorf("Transform returned error: %v", err)
+		}
+	}
+
+	result := buf.String()
+
+	// Should contain response.incomplete event
+	if !strings.Contains(result, `"type":"response.incomplete"`) {
+		t.Error("Result should contain response.incomplete event for max_tokens stop reason")
+	}
+
+	// Should have status: incomplete
+	if !strings.Contains(result, `"status":"incomplete"`) {
+		t.Error("Result should contain status: incomplete")
+	}
+
+	// Should have incomplete_details with reason
+	if !strings.Contains(result, `"incomplete_details"`) {
+		t.Error("Result should contain incomplete_details")
+	}
+
+	if !strings.Contains(result, `"reason":"max_output_tokens"`) {
+		t.Error("Result should contain reason: max_output_tokens")
+	}
+}
+
+// TestResponsesTransformer_NormalCompletion tests that normal stop produces response.completed.
+func TestResponsesTransformer_NormalCompletion(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewResponsesTransformer(&buf)
+
+	events := []types.Event{
+		{
+			Type: "message_start",
+			Message: &types.MessageInfo{
+				ID:    "msg_abc",
+				Model: "claude-3",
+			},
+		},
+		{
+			Type:         "content_block_start",
+			Index:        intPtr(0),
+			ContentBlock: mustMarshal(types.ContentBlock{Type: "text"}),
+		},
+		{
+			Type:  "content_block_delta",
+			Index: intPtr(0),
+			Delta: mustMarshal(types.TextDelta{Type: "text_delta", Text: "Hello"}),
+		},
+		{
+			Type:  "content_block_stop",
+			Index: intPtr(0),
+		},
+		{
+			Type:       "message_delta",
+			StopReason: "end_turn",
+		},
+		{
+			Type: "message_stop",
+		},
+	}
+
+	for _, e := range events {
+		data, _ := json.Marshal(e)
+		err := transformer.Transform(&sse.Event{Data: string(data)})
+		if err != nil {
+			t.Errorf("Transform returned error: %v", err)
+		}
+	}
+
+	result := buf.String()
+
+	// Should contain response.completed event
+	if !strings.Contains(result, `"type":"response.completed"`) {
+		t.Error("Result should contain response.completed event for end_turn stop reason")
+	}
+
+	// Should have status: completed
+	if !strings.Contains(result, `"status":"completed"`) {
+		t.Error("Result should contain status: completed")
+	}
+
+	// Should NOT have incomplete_details
+	if strings.Contains(result, `"incomplete_details"`) {
+		t.Error("Result should NOT contain incomplete_details for normal completion")
 	}
 }

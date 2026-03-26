@@ -255,6 +255,57 @@ func proxyRequest(c *gin.Context, h Handler, body []byte) {
 	// Forward custom headers from original request
 	h.ForwardHeaders(c, req)
 
+	// Check if capture is enabled and route to appropriate streaming method
+	// Capture context is attached by CaptureMiddleware if capture is enabled
+	cc := capture.GetCaptureContext(c.Request.Context())
+
+	// Set up SSE stream headers before creating transformer and making upstream request
+	setStreamHeaders(c)
+
+	// Create and initialize transformer BEFORE upstream request
+	// This ensures response.created is emitted before any upstream response
+	var transformer transform.SSETransformer
+	var responseID string
+
+	if cc != nil {
+		// For capture mode, we need special handling - transformer created inside c.Stream
+		// We'll initialize it there before reading from upstream
+		transformer = nil
+	} else {
+		// Create transformer without capture wrapper
+		transformer = h.CreateTransformer(c.Writer)
+		// Set context for cache status tracking
+		setContextOnTransformer(transformer, c.Request.Context())
+		// Initialize transformer and emit response.created before upstream call
+		if err := transformer.Initialize(); err != nil {
+			logging.ErrorMsg("Failed to initialize transformer: %v", err)
+			h.WriteError(c, http.StatusInternalServerError, "Failed to initialize response stream")
+			return
+		}
+		defer transformer.Close()
+
+		// Get response ID for stream cancellation registration
+		if getter, ok := transformer.(transform.ResponseIDGetter); ok {
+			responseID = getter.GetResponseID()
+		}
+	}
+
+	// Register stream for cancellation support if we have a response ID
+	var cancel context.CancelFunc
+	if responseID != "" {
+		registry := GetGlobalRegistry()
+		var streamCtx context.Context
+		streamCtx, cancel = context.WithCancel(c.Request.Context())
+		c.Request = c.Request.WithContext(streamCtx)
+		registry.Register(responseID, cancel, transformer)
+		defer func() {
+			registry.Remove(responseID)
+			if cancel != nil {
+				cancel()
+			}
+		}()
+	}
+
 	// Execute the upstream request
 	resp, err := client.Do(req)
 	if err != nil {
@@ -270,15 +321,14 @@ func proxyRequest(c *gin.Context, h Handler, body []byte) {
 		return
 	}
 
-	// Check if capture is enabled and route to appropriate streaming method
-	// Capture context is attached by CaptureMiddleware if capture is enabled
-	cc := capture.GetCaptureContext(c.Request.Context())
 	if cc != nil {
 		// Stream with capture when capture is enabled
+		// Transformer is created and initialized inside streamWithCapture
 		streamWithCapture(c, resp.Body, h, cc)
 	} else {
 		// Stream without capture for lower latency
-		streamWithoutCapture(c, resp.Body, h)
+		// Transformer is already initialized, just stream events
+		streamWithInitializedTransformer(c, resp.Body, transformer)
 	}
 }
 
@@ -305,15 +355,14 @@ func streamResponse(c *gin.Context, body io.Reader, h Handler) {
 
 	// Stream SSE events to client via Gin's streaming facility
 	c.Stream(func(w io.Writer) bool {
-		// Iterate over all SSE events from upstream
 		for ev, err := range sse.Read(body, nil) {
 			if err != nil {
-				// Context canceled is expected when client disconnects after receiving complete response
+				// Context canceled means client disconnected - can't send response.failed
 				if errors.Is(err, context.Canceled) {
 					logging.DebugMsg("Stream completed, client disconnected")
-				} else {
-					logging.ErrorMsg("SSE stream error: %v", err)
+					return false
 				}
+				logging.ErrorMsg("SSE stream error: %v", err)
 				emitStreamError(transformer, err)
 				return false
 			}
@@ -324,7 +373,6 @@ func streamResponse(c *gin.Context, body io.Reader, h Handler) {
 				return false
 			}
 		}
-		// Return false to signal end of stream
 		return false
 	})
 }
@@ -361,9 +409,6 @@ func setStreamHeaders(c *gin.Context) {
 // @pre cc != nil and is properly initialized.
 // @post All events are captured in cc.Recorder.
 func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.CaptureContext) {
-	// Set headers required for SSE streaming
-	setStreamHeaders(c)
-
 	startTime := cc.StartTime
 	// Create capture writer for downstream (transformed) events
 	downstream := capture.NewCaptureWriter(startTime)
@@ -386,15 +431,22 @@ func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.Ca
 			transformer.Close()
 		}()
 
+		// Initialize transformer and emit response.created BEFORE reading from upstream
+		if err := transformer.Initialize(); err != nil {
+			logging.ErrorMsg("Failed to initialize transformer in capture mode: %v", err)
+			emitStreamError(transformer, err)
+			return false
+		}
+
 		// Iterate over all SSE events from upstream
 		for ev, err := range sse.Read(body, nil) {
 			if err != nil {
-				// Context canceled is expected when client disconnects after receiving complete response
+				// Context canceled means client disconnected - can't send response.failed
 				if errors.Is(err, context.Canceled) {
 					logging.DebugMsg("Stream completed, client disconnected")
-				} else {
-					logging.ErrorMsg("SSE stream error (capture): %v", err)
+					return false
 				}
+				logging.ErrorMsg("SSE stream error (capture): %v", err)
 				emitStreamError(transformer, err)
 				return false
 			}
@@ -423,6 +475,41 @@ func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.Ca
 	finalizeCapture(cc, downstream, upstream)
 }
 
+// streamWithInitializedTransformer streams events using an already-initialized transformer.
+// This is used in non-capture mode where Initialize() was called before the upstream request.
+func streamWithInitializedTransformer(c *gin.Context, body io.Reader, transformer transform.SSETransformer) {
+	// Stream events without capture overhead
+	// Get flusher from Gin response writer for immediate delivery
+	flusher, canFlush := c.Writer.(http.Flusher)
+
+	c.Stream(func(w io.Writer) bool {
+		for ev, err := range sse.Read(body, nil) {
+			if err != nil {
+				// Context canceled means client disconnected - can't send response.failed
+				if errors.Is(err, context.Canceled) {
+					logging.DebugMsg("Stream completed, client disconnected")
+					return false
+				}
+				logging.ErrorMsg("SSE stream error (no-capture): %v", err)
+				emitStreamError(transformer, err)
+				return false
+			}
+			// Transform and send event directly to client
+			if err := transformer.Transform(&ev); err != nil {
+				logging.ErrorMsg("Transform error (no-capture): %v", err)
+				emitStreamError(transformer, err)
+				return false
+			}
+
+			// Flush after each event to ensure immediate delivery
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		return false
+	})
+}
+
 // streamWithoutCapture streams the response without capturing data.
 // Used when capture is disabled to minimize latency.
 //
@@ -449,12 +536,12 @@ func streamWithoutCapture(c *gin.Context, body io.Reader, h Handler) {
 	c.Stream(func(w io.Writer) bool {
 		for ev, err := range sse.Read(body, nil) {
 			if err != nil {
-				// Context canceled is expected when client disconnects after receiving complete response
+				// Context canceled means client disconnected - can't send response.failed
 				if errors.Is(err, context.Canceled) {
 					logging.DebugMsg("Stream completed, client disconnected")
-				} else {
-					logging.ErrorMsg("SSE stream error (no-capture): %v", err)
+					return false
 				}
+				logging.ErrorMsg("SSE stream error (no-capture): %v", err)
 				emitStreamError(transformer, err)
 				return false
 			}
@@ -577,7 +664,7 @@ func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.Ca
 	// 📤 = upstream (to LLM), 📥 = downstream (to client)
 	// ⬆️ = input tokens, ⬇️ = output tokens, 📖 = cache read, 💾  = cache creation
 	if cacheStatus != "" {
-		logging.InfoMsg("|📤 ⬆️ %d ⬇️ %d 📖 %d 💾  %d %s|  |📥 ⬆️ %d ⬇️ %d 📖 %d 💾  %d %s| %s [%s] [%s]",
+		logging.InfoMsg("|📤 ⬆️ %d ⬇️ %d 📖 %d 💾 %d r=%s|  |📥 ⬆️ %d ⬇️ %d 📖 %d 💾 %d r=%s| %s [%s] [%s]",
 			upstreamUsage.InputTokens,
 			upstreamUsage.OutputTokens,
 			upstreamUsage.CacheReadTokens,
@@ -593,7 +680,7 @@ func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.Ca
 			cc.RequestID,
 		)
 	} else {
-		logging.InfoMsg("|📤 ⬆️ %d ⬇️ %d 📖 %d 💾  %d %s|  |📥 ⬆️ %d ⬇️ %d 📖 %d 💾  %d %s| [%s] [%s]",
+		logging.InfoMsg("|📤 ⬆️ %d ⬇️ %d 📖 %d 💾 %d r=%s|  |📥 ⬆️ %d ⬇️ %d 📖 %d 💾 %d r=%s| [%s] [%s]",
 			upstreamUsage.InputTokens,
 			upstreamUsage.OutputTokens,
 			upstreamUsage.CacheReadTokens,

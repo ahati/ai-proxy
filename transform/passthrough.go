@@ -102,3 +102,27 @@ func (t *PassthroughTransformer) Flush() error {
 func (t *PassthroughTransformer) Close() error {
 	return nil
 }
+
+// Initialize is a no-op for passthrough transformer.
+// There is no initialization needed.
+//
+// @brief No-op initialization for passthrough transformer.
+//
+// @return Always returns nil.
+//
+// @note Included for interface compatibility.
+func (t *PassthroughTransformer) Initialize() error {
+	return nil
+}
+
+// HandleCancel handles cancellation requests.
+// For PassthroughTransformer, this is a no-op as there is no buffered state.
+//
+// @brief No-op cancellation handler for passthrough transformer.
+//
+// @return Always returns nil.
+//
+// @note Included for interface compatibility.
+func (t *PassthroughTransformer) HandleCancel() error {
+	return nil
+}

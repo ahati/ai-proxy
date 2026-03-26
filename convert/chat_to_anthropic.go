@@ -847,3 +847,15 @@ func (t *ChatToAnthropicTransformer) Close() error {
 	t.messageStopSent = true
 	return t.writeEvent("message_stop", nil)
 }
+
+// Initialize prepares the transformer and emits initial events before upstream request.
+// For ChatToAnthropicTransformer, this is a no-op as no initial events are needed.
+func (t *ChatToAnthropicTransformer) Initialize() error {
+	return nil
+}
+
+// HandleCancel handles cancellation requests.
+// For ChatToAnthropicTransformer, this is a no-op.
+func (t *ChatToAnthropicTransformer) HandleCancel() error {
+	return nil
+}
