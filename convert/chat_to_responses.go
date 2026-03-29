@@ -306,8 +306,8 @@ type ChatToResponsesTransformer struct {
 	encryptedReasoning string
 
 	// Tool call extraction from reasoning content (for Kimi-style markup)
-	toolCallTransform bool             // enabled by config
-	parser            *toolcall.Parser // parser for tool call markup
+	toolCallTransform bool                 // enabled by config
+	parser            *toolcall.KimiParser // parser for tool call markup
 	extractedToolArgs strings.Builder
 	extractedToolID   string
 	extractedToolName string
@@ -335,7 +335,7 @@ func NewChatToResponsesTransformer(w io.Writer) *ChatToResponsesTransformer {
 		created:        time.Now().Unix(),
 		sequenceNumber: 0,
 		shouldStore:    true, // default to storing
-		parser:         toolcall.NewParser(toolcall.DefaultTokens),
+		parser:         toolcall.NewKimiParser(),
 		glm5Parser:     toolcall.NewGLM5Parser(),
 	}
 }

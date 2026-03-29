@@ -579,7 +579,7 @@ func TestTransformer_Anthropic_TextPassthrough(t *testing.T) {
 }
 
 func TestParser_Parse(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 
 	events := p.Parse("<|tool_calls_section_begin|><|tool_call_begin|>bash<|tool_call_argument_begin|>{\"cmd\":\"ls\"}<|tool_call_end|><|tool_calls_section_end|>")
 	if len(events) == 0 {
@@ -599,7 +599,7 @@ func TestParser_Parse(t *testing.T) {
 }
 
 func TestParser_IsIdle(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 
 	if !p.IsIdle() {
 		t.Error("expected parser to be idle initially")

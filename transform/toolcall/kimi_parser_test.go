@@ -35,7 +35,7 @@ func TestParser_SimpleContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewParser(DefaultTokens)
+			p := NewKimiParser()
 			events := p.Parse(tt.input)
 			if len(events) != len(tt.expected) {
 				t.Errorf("expected %d events, got %d", len(tt.expected), len(events))
@@ -54,7 +54,7 @@ func TestParser_SimpleContent(t *testing.T) {
 }
 
 func TestParser_SingleToolCall(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 
 	events := p.Parse("Before<|tool_calls_section_begin|>")
 	events = append(events, p.Parse("<|tool_call_begin|>bash<|tool_call_argument_begin|>")...)
@@ -97,7 +97,7 @@ func TestParser_SingleToolCall(t *testing.T) {
 }
 
 func TestParser_MultipleToolCalls(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 
 	events := p.Parse("<|tool_calls_section_begin|>")
 	events = append(events, p.Parse("<|tool_call_begin|>bash<|tool_call_argument_begin|>")...)
@@ -139,7 +139,7 @@ func TestParser_MultipleToolCalls(t *testing.T) {
 }
 
 func TestParser_ChunkedInput(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 
 	events := p.Parse("Start<|tool_calls_section_begin|>")
 	events = append(events, p.Parse("<|tool_call_begin|>bash<|tool_call_argument_begin|>")...)
@@ -204,7 +204,7 @@ func TestParser_IncompleteToolCall(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewParser(DefaultTokens)
+			p := NewKimiParser()
 			for _, input := range tt.inputs {
 				p.Parse(input)
 			}
@@ -217,7 +217,7 @@ func TestParser_IncompleteToolCall(t *testing.T) {
 
 func TestParser_StateTransitions(t *testing.T) {
 	t.Run("idle to in_section", func(t *testing.T) {
-		p := NewParser(DefaultTokens)
+		p := NewKimiParser()
 		if p.State() != stateIdle {
 			t.Errorf("expected initial state to be idle, got %v", p.State())
 		}
@@ -228,7 +228,7 @@ func TestParser_StateTransitions(t *testing.T) {
 	})
 
 	t.Run("in_section to reading_id", func(t *testing.T) {
-		p := NewParser(DefaultTokens)
+		p := NewKimiParser()
 		p.Parse("<|tool_calls_section_begin|>")
 		p.Parse("<|tool_call_begin|>")
 		if p.State() != stateReadingID {
@@ -237,7 +237,7 @@ func TestParser_StateTransitions(t *testing.T) {
 	})
 
 	t.Run("reading_id to reading_args", func(t *testing.T) {
-		p := NewParser(DefaultTokens)
+		p := NewKimiParser()
 		p.Parse("<|tool_calls_section_begin|>")
 		p.Parse("<|tool_call_begin|>")
 		p.Parse("bash<|tool_call_argument_begin|>")
@@ -247,7 +247,7 @@ func TestParser_StateTransitions(t *testing.T) {
 	})
 
 	t.Run("reading_args back to in_section", func(t *testing.T) {
-		p := NewParser(DefaultTokens)
+		p := NewKimiParser()
 		p.Parse("<|tool_calls_section_begin|>")
 		p.Parse("<|tool_call_begin|>")
 		p.Parse("bash<|tool_call_argument_begin|>")
@@ -258,7 +258,7 @@ func TestParser_StateTransitions(t *testing.T) {
 	})
 
 	t.Run("in_section to trailing", func(t *testing.T) {
-		p := NewParser(DefaultTokens)
+		p := NewKimiParser()
 		p.Parse("<|tool_calls_section_begin|>")
 		p.Parse("<|tool_calls_section_end|>")
 		if p.State() != stateTrailing {
@@ -267,7 +267,7 @@ func TestParser_StateTransitions(t *testing.T) {
 	})
 
 	t.Run("trailing to in_section", func(t *testing.T) {
-		p := NewParser(DefaultTokens)
+		p := NewKimiParser()
 		p.Parse("<|tool_calls_section_begin|>")
 		p.Parse("<|tool_calls_section_end|>")
 		p.Parse("text<|tool_calls_section_begin|>")
@@ -324,7 +324,7 @@ func TestParser_ToolCallIDParsing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewParser(DefaultTokens)
+			p := NewKimiParser()
 			id, name := p.parseToolCallID(tt.toolID)
 
 			if !strings.HasPrefix(id, tt.wantIDPrefix) && id != tt.wantIDPrefix {
@@ -353,7 +353,7 @@ func TestParser_ExtractFunctionName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			p := NewParser(DefaultTokens)
+			p := NewKimiParser()
 			result := p.extractFunctionName(tt.input)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
@@ -363,7 +363,7 @@ func TestParser_ExtractFunctionName(t *testing.T) {
 }
 
 func TestParser_Reset(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 	p.Parse("<|tool_calls_section_begin|><|tool_call_begin|>bash<|tool_call_argument_begin|>{}")
 
 	if p.State() == stateIdle {
@@ -384,7 +384,7 @@ func TestParser_Reset(t *testing.T) {
 }
 
 func TestParser_Buffer(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 	p.Parse("<|tool_calls_section_begin|>")
 
 	if p.Buffer() != "" {
@@ -403,7 +403,7 @@ func TestParser_Buffer(t *testing.T) {
 }
 
 func TestParser_EmptySection(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 	p.Parse("<|tool_calls_section_begin|>")
 	events := p.Parse("<|tool_calls_section_end|>")
 
@@ -420,7 +420,7 @@ func TestParser_EmptySection(t *testing.T) {
 }
 
 func TestParser_TrailingContent(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 	p.Parse("<|tool_calls_section_begin|>")
 	events := p.Parse("<|tool_calls_section_end|>")
 	events = append(events, p.Parse("trailing text")...)
@@ -448,7 +448,7 @@ func TestParser_TrailingContent(t *testing.T) {
 }
 
 func TestParser_MultipleSections(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 
 	events := p.Parse("text1<|tool_calls_section_begin|>")
 	events = append(events, p.Parse("<|tool_call_begin|>bash<|tool_call_argument_begin|>{}<|tool_call_end|>")...)
@@ -494,7 +494,7 @@ func TestParser_MultipleSections(t *testing.T) {
 }
 
 func TestParser_EmptyToolArgs(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 	events := p.Parse("<|tool_calls_section_begin|>")
 	events = append(events, p.Parse("<|tool_call_begin|>bash<|tool_call_argument_begin|>")...)
 	events = append(events, p.Parse("<|tool_call_end|>")...)
@@ -518,7 +518,7 @@ func TestParser_EmptyToolArgs(t *testing.T) {
 }
 
 func TestParser_WhitespaceInToolID(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 	events := p.Parse("<|tool_calls_section_begin|>")
 	events = append(events, p.Parse("<|tool_call_begin|>  bash  <|tool_call_argument_begin|>{}<|tool_call_end|>")...)
 	events = append(events, p.Parse("<|tool_calls_section_end|>")...)
@@ -536,47 +536,8 @@ func TestParser_WhitespaceInToolID(t *testing.T) {
 	}
 }
 
-func TestParser_CustomTokens(t *testing.T) {
-	customTokens := Tokens{
-		SectionBegin: "[SECTION]",
-		CallBegin:    "[CALL]",
-		ArgBegin:     "[ARGS]",
-		CallEnd:      "[/CALL]",
-		SectionEnd:   "[/SECTION]",
-	}
-
-	p := NewParser(customTokens)
-	events := p.Parse("text[SECTION]")
-	events = append(events, p.Parse("[CALL]bash[ARGS]{}[/CALL]")...)
-	events = append(events, p.Parse("[/SECTION]")...)
-	events = append(events, p.Parse("trailing")...)
-
-	expected := []struct {
-		Type EventType
-		Text string
-		Name string
-	}{
-		{Type: EventContent, Text: "text"},
-		{Type: EventToolStart, Name: "bash"},
-		{Type: EventToolArgs},
-		{Type: EventToolEnd},
-		{Type: EventSectionEnd},
-		{Type: EventContent, Text: "trailing"},
-	}
-
-	if len(events) != len(expected) {
-		t.Fatalf("expected %d events, got %d\n%+v", len(expected), len(events), events)
-	}
-
-	for i, e := range events {
-		if e.Type != expected[i].Type {
-			t.Errorf("event %d: expected type %v, got %v", i, expected[i].Type, e.Type)
-		}
-	}
-}
-
 func TestParser_ToolIndexIncrement(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 	events := p.Parse("<|tool_calls_section_begin|>")
 	events = append(events, p.Parse("<|tool_call_begin|>a<|tool_call_argument_begin|>{}<|tool_call_end|>")...)
 	events = append(events, p.Parse("<|tool_call_begin|>b<|tool_call_argument_begin|>{}<|tool_call_end|>")...)
@@ -601,7 +562,7 @@ func TestParser_ToolIndexIncrement(t *testing.T) {
 // TestParser_InvalidToolCallID tests that invalid tool call IDs are rejected
 // and emitted as regular content instead.
 func TestParser_InvalidToolCallID(t *testing.T) {
-	p := NewParser(DefaultTokens)
+	p := NewKimiParser()
 
 	// Test with a very long ID (should be rejected)
 	longID := strings.Repeat("a", 300)
@@ -657,4 +618,65 @@ func TestParser_InvalidToolCallID(t *testing.T) {
 	if events[0].Name != "bash" {
 		t.Errorf("expected name 'bash', got %s", events[0].Name)
 	}
+}
+
+func TestParser_ForceFlush(t *testing.T) {
+	t.Run("idle with empty buffer", func(t *testing.T) {
+		p := NewKimiParser()
+		events := p.ForceFlush()
+		if events != nil {
+			t.Errorf("expected nil events, got %v", events)
+		}
+	})
+
+	t.Run("buffered content in idle", func(t *testing.T) {
+		p := NewKimiParser()
+		events := p.Parse("hello world")
+		if len(events) != 1 || events[0].Type != EventContent {
+			t.Fatalf("expected EventContent from Parse, got %v", events)
+		}
+		flushed := p.ForceFlush()
+		if flushed != nil {
+			t.Errorf("expected nil from ForceFlush after full parse, got %v", flushed)
+		}
+	})
+
+	t.Run("mid tool call flushes args", func(t *testing.T) {
+		p := NewKimiParser()
+		parseEvents := p.Parse("<|tool_calls_section_begin|><|tool_call_begin|>bash<|tool_call_argument_begin|>{")
+		// Parser emits EventSectionBegin, EventToolStart, EventToolArgs("{"), etc. during Parse
+		var hasArgs bool
+		for _, e := range parseEvents {
+			if e.Type == EventToolArgs && e.Args == "{" {
+				hasArgs = true
+			}
+		}
+		if !hasArgs {
+			t.Errorf("expected EventToolArgs with '{' from Parse, got %v", parseEvents)
+		}
+		// ForceFlush returns nil since Parse already emitted everything
+		events := p.ForceFlush()
+		if events != nil {
+			t.Errorf("expected nil from ForceFlush, got %v", events)
+		}
+	})
+
+	t.Run("after ForceFlush parser is reusable", func(t *testing.T) {
+		p := NewKimiParser()
+		p.ForceFlush()
+
+		events := p.Parse("<|tool_calls_section_begin|><|tool_call_begin|>bash<|tool_call_argument_begin|>{}<|tool_call_end|><|tool_calls_section_end|>")
+		if len(events) < 3 {
+			t.Fatalf("expected at least 3 events after reuse, got %d", len(events))
+		}
+		hasToolStart := false
+		for _, e := range events {
+			if e.Type == EventToolStart {
+				hasToolStart = true
+			}
+		}
+		if !hasToolStart {
+			t.Error("expected EventToolStart after reuse")
+		}
+	})
 }

@@ -30,7 +30,7 @@ type Usage struct {
 type ResponsesTransformer struct {
 	sseWriter  *transform.SSEWriter
 	formatter  *ResponsesFormatter
-	parser     *Parser
+	parser     *KimiParser
 	messageID  string
 	model      string
 	blockIndex int
@@ -588,7 +588,7 @@ func NewResponsesTransformer(output io.Writer) *ResponsesTransformer {
 	return &ResponsesTransformer{
 		sseWriter:      transform.NewSSEWriter(output),
 		formatter:      NewResponsesFormatter("", ""),
-		parser:         NewParser(DefaultTokens),
+		parser:         NewKimiParser(),
 		glm5Parser:     NewGLM5Parser(),
 		outputItems:    make([]map[string]interface{}, 0),
 		sequenceNumber: 0,

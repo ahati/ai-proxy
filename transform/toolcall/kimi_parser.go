@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Tokens defines the delimiter strings used to mark tool call sections in LLM output.
+// KimiTokens defines the delimiter strings used to mark tool call sections in LLM output.
 // These tokens are emitted by Kimi models to indicate the structure of tool calls.
 //
 // @brief Configuration struct for tool call delimiter tokens used in parsing.
@@ -22,7 +22,7 @@ import (
 //
 // @pre All token fields must be non-empty strings.
 // @post Parser behavior is determined by the configured token values.
-type Tokens struct {
+type KimiTokens struct {
 	// SectionBegin marks the start of a tool calls section.
 	// Must be unique and not a substring of other tokens.
 	// Example: ""
@@ -49,18 +49,18 @@ type Tokens struct {
 	SectionEnd string
 }
 
-// DefaultTokens contains the standard delimiter tokens used by Kimi models.
+// KimiDefaultTokens contains the standard delimiter tokens used by Kimi models.
 // These tokens are specific to the Moonshot AI / Kimi model family.
 //
 // @brief Pre-configured Tokens instance with Kimi model delimiters.
 //
 // @note These values are model-specific and may change with model updates.
 //
-//	Use DefaultTokens for Kimi models; create custom Tokens for other models.
+//	Use KimiDefaultTokens for Kimi models; create custom Tokens for other models.
 //
 // @pre None (constant configuration).
 // @post Contains valid, non-overlapping token values.
-var DefaultTokens = Tokens{
+var KimiDefaultTokens = KimiTokens{
 	SectionBegin: "<|tool_calls_section_begin|>",
 	CallBegin:    "<|tool_call_begin|>",
 	ArgBegin:     "<|tool_call_argument_begin|>",
@@ -93,7 +93,7 @@ var DefaultTokens = Tokens{
 // @note A true result does not guarantee valid tool call structure;
 //
 //	it only indicates that parsing should be attempted.
-func (t Tokens) ContainsAny(s string) bool {
+func (t KimiTokens) ContainsAny(s string) bool {
 	// Check for the common prefix of all tool call markers.
 	// This is more efficient than multiple Contains calls.
 	return strings.Contains(s, "<|tool_call")
@@ -186,53 +186,7 @@ const (
 	EventSectionEnd
 )
 
-// Event represents a parsed event from the tool call stream.
-// Events are emitted by the Parser as it processes input text.
-//
-// @brief Data structure representing a parsed tool call or content event.
-//
-// @note Only certain fields are valid for each EventType:
-//   - EventContent: Text
-//   - EventToolStart: ID, Name, Index
-//   - EventToolArgs: Args, Index
-//   - EventToolEnd: Index
-//   - EventSectionEnd: (no fields)
-//
-// @note Event instances should not be reused across parsing calls.
-//
-//	Each Parse call returns new Event instances.
-type Event struct {
-	// Type identifies the kind of event.
-	// Determines which other fields are valid.
-	Type EventType
-
-	// Text contains the content string for EventContent events.
-	// Empty for all other event types.
-	Text string
-
-	// ID contains the tool call identifier for EventToolStart events.
-	// Format: "call_<index>_<timestamp>" or original ID from LLM.
-	// Empty for all other event types.
-	ID string
-
-	// Name contains the function name for EventToolStart events.
-	// This is the name of the function being called.
-	// Empty for all other event types.
-	Name string
-
-	// Args contains the argument data for EventToolArgs events.
-	// This is a fragment of the JSON arguments string.
-	// Multiple EventToolArgs may be emitted for streaming arguments.
-	// Empty for all other event types.
-	Args string
-
-	// Index contains the zero-based tool call index.
-	// Valid for EventToolStart, EventToolArgs, and EventToolEnd events.
-	// Incremented for each new tool call in a section.
-	Index int
-}
-
-// Parser extracts tool calls from streaming text using delimiter tokens.
+// KimiParser extracts tool calls from streaming text using delimiter tokens.
 // It maintains state across multiple Parse calls to handle partial tokens.
 //
 // @brief Stateful parser for extracting tool calls from streaming LLM output.
@@ -245,17 +199,17 @@ type Event struct {
 //
 //	buffering and processing in subsequent Parse calls.
 //
-// @pre Parser must be initialized via NewParser before use.
+// @pre KimiParser must be initialized via NewKimiParser before use.
 // @post After parsing, Reset() may be called to reuse the parser.
 //
 // Memory Safety:
 // - The parser buffers only unprocessed input.
 // - Emitted events do not retain references to the buffer.
 // - No memory leaks occur with proper Close() semantics.
-type Parser struct {
+type KimiParser struct {
 	// tokens contains the delimiter tokens used for parsing.
 	// Configured at initialization and immutable during parsing.
-	tokens Tokens
+	tokens KimiTokens
 
 	// state represents the current parser state.
 	// Determines which tokens are expected next.
@@ -272,7 +226,7 @@ type Parser struct {
 	toolIndex int
 }
 
-// NewParser creates a parser with the given delimiter tokens.
+// NewKimiParser creates a parser with the given delimiter tokens.
 //
 // @brief Creates a new Parser instance initialized with specified tokens.
 //
@@ -288,8 +242,8 @@ type Parser struct {
 // @post Parser is in stateIdle state with empty buffer.
 //
 // @note The parser does not take ownership of tokens; it copies the struct.
-func NewParser(tokens Tokens) *Parser {
-	return &Parser{tokens: tokens}
+func NewKimiParser() *KimiParser {
+	return &KimiParser{tokens: KimiDefaultTokens}
 }
 
 // Parse processes text and returns any complete events.
@@ -308,7 +262,7 @@ func NewParser(tokens Tokens) *Parser {
 //	Returns empty slice if no complete events available.
 //	Events are ordered by their position in input.
 //
-// @pre Parser must be initialized via NewParser.
+// @pre Parser must be initialized via NewKimiParser.
 // @pre text must be valid UTF-8.
 // @post Input text is appended to internal buffer.
 // @post Complete events are removed from buffer.
@@ -322,7 +276,7 @@ func NewParser(tokens Tokens) *Parser {
 // @note Callers should check returned events even when text is empty,
 //
 //	as buffered data may produce events.
-func (p *Parser) Parse(text string) []Event {
+func (p *KimiParser) Parse(text string) []Event {
 	// Append new text to buffer for processing.
 	// Buffer may already contain partial data from previous calls.
 	p.buf += text
@@ -338,7 +292,7 @@ func (p *Parser) Parse(text string) []Event {
 //
 // @pre p.buf contains all unprocessed input.
 // @post p.buf contains only unprocessed (partial) data.
-func (p *Parser) processBuffer() []Event {
+func (p *KimiParser) processBuffer() []Event {
 	var events []Event
 	for {
 		prevBuf := p.buf
@@ -370,7 +324,7 @@ func (p *Parser) processBuffer() []Event {
 // @pre p.state indicates the current parser state.
 // @post p.state may be updated based on recognized tokens.
 // @post p.buf may be modified based on processed content.
-func (p *Parser) processState() []Event {
+func (p *KimiParser) processState() []Event {
 	switch p.state {
 	case stateIdle:
 		return p.processIdle()
@@ -402,7 +356,7 @@ func (p *Parser) processState() []Event {
 //
 // @pre Parser must be in stateIdle.
 // @post Parser transitions to stateInSection if SectionBegin found.
-func (p *Parser) processIdle() []Event {
+func (p *KimiParser) processIdle() []Event {
 	// Search for section begin marker in buffer.
 	idx := strings.Index(p.buf, p.tokens.SectionBegin)
 	if idx < 0 {
@@ -445,7 +399,7 @@ func (p *Parser) processIdle() []Event {
 //
 // @pre Parser must be in stateInSection.
 // @post Parser transitions based on which token is found first.
-func (p *Parser) processInSection() []Event {
+func (p *KimiParser) processInSection() []Event {
 	// Look for both possible tokens - the one found first wins.
 	callIdx := strings.Index(p.buf, p.tokens.CallBegin)
 	endIdx := strings.Index(p.buf, p.tokens.SectionEnd)
@@ -476,7 +430,7 @@ func (p *Parser) processInSection() []Event {
 //
 // @pre Parser must be in stateReadingID.
 // @post Parser transitions to stateReadingArgs if ArgBegin found.
-func (p *Parser) processReadingID() []Event {
+func (p *KimiParser) processReadingID() []Event {
 	// Search for argument begin marker.
 	argIdx := strings.Index(p.buf, p.tokens.ArgBegin)
 	if argIdx < 0 {
@@ -536,7 +490,7 @@ func (p *Parser) processReadingID() []Event {
 // @pre Parser must be in stateReadingArgs.
 // @post Parser transitions to stateInSection if CallEnd found.
 // @post toolIndex is incremented after complete tool call.
-func (p *Parser) processReadingArgs() []Event {
+func (p *KimiParser) processReadingArgs() []Event {
 	// Search for call end marker.
 	endIdx := strings.Index(p.buf, p.tokens.CallEnd)
 	if endIdx < 0 {
@@ -582,7 +536,7 @@ func (p *Parser) processReadingArgs() []Event {
 //
 // @pre Parser must be in stateTrailing.
 // @post Parser transitions to stateInSection if new section found.
-func (p *Parser) processTrailing() []Event {
+func (p *KimiParser) processTrailing() []Event {
 	// Check if there's another tool call section starting.
 	idx := strings.Index(p.buf, p.tokens.SectionBegin)
 	if idx >= 0 {
@@ -619,7 +573,7 @@ func (p *Parser) processTrailing() []Event {
 // @pre Parser must be in a section-processing state.
 // @post Parser transitions to stateTrailing.
 // @post SectionEnd marker and preceding content are removed from buffer.
-func (p *Parser) endSection(endIdx int) []Event {
+func (p *KimiParser) endSection(endIdx int) []Event {
 	// Preserve any trailing content after the section end marker.
 	trailing := p.buf[endIdx+len(p.tokens.SectionEnd):]
 	p.buf = trailing
@@ -648,7 +602,7 @@ func (p *Parser) endSection(endIdx int) []Event {
 // @note Generated IDs use format "call_<index>_<timestamp>" to ensure uniqueness.
 //
 //	The timestamp component ensures IDs are unique even across sessions.
-func (p *Parser) parseToolCallID(raw string) (string, string) {
+func (p *KimiParser) parseToolCallID(raw string) (string, string) {
 	raw = strings.TrimSpace(raw)
 
 	// Validate that this looks like a tool call, not random text.
@@ -670,7 +624,7 @@ func (p *Parser) parseToolCallID(raw string) (string, string) {
 
 // isValidToolCallID checks if the raw text looks like a valid tool call ID/name.
 // Real tool calls have short, single-line identifiers without special formatting.
-func (p *Parser) isValidToolCallID(raw string) bool {
+func (p *KimiParser) isValidToolCallID(raw string) bool {
 	// Reject if empty
 	if raw == "" {
 		return false
@@ -713,7 +667,7 @@ func (p *Parser) isValidToolCallID(raw string) bool {
 //  1. Trim whitespace
 //  2. Remove module prefix (everything before last '.')
 //  3. Remove parameter suffix (everything after first ':')
-func (p *Parser) extractFunctionName(raw string) string {
+func (p *KimiParser) extractFunctionName(raw string) string {
 	raw = strings.TrimSpace(raw)
 	// Remove module prefix if present.
 	// Example: "python.bash" -> "bash"
@@ -744,7 +698,7 @@ func (p *Parser) extractFunctionName(raw string) string {
 //	mixing data from different requests.
 //
 // @note Reset() is idempotent - calling multiple times has the same effect.
-func (p *Parser) Reset() {
+func (p *KimiParser) Reset() {
 	p.state = stateIdle
 	p.buf = ""
 	p.toolIndex = 0
@@ -763,7 +717,7 @@ func (p *Parser) Reset() {
 // @note This method is primarily for testing and debugging.
 //
 //	Production code should not need to check parser state.
-func (p *Parser) State() state {
+func (p *KimiParser) State() state {
 	return p.state
 }
 
@@ -780,8 +734,32 @@ func (p *Parser) State() state {
 // @note When IsIdle returns false, the parser is expecting more input to complete
 //
 //	a tool call. Incoming text should be fed to Parse() regardless of content.
-func (p *Parser) IsIdle() bool {
+func (p *KimiParser) IsIdle() bool {
 	return p.state == stateIdle
+}
+
+// ForceFlush emits any buffered content as a single EventContent and resets
+// the parser to idle state. This is used when a content block ends (e.g.
+// content_block_stop) to ensure no partial data is lost.
+//
+// @brief Flushes buffered data as content and resets parser state.
+//
+// @return []Event Single EventContent if buffer is non-empty, nil otherwise.
+//
+// @pre Parser may be in any state.
+// @post Parser is in stateIdle with empty buffer and toolIndex reset to 0.
+func (p *KimiParser) ForceFlush() []Event {
+	if p.state == stateIdle && p.buf == "" {
+		return nil
+	}
+	text := p.buf
+	p.buf = ""
+	p.state = stateIdle
+	p.toolIndex = 0
+	if text == "" {
+		return nil
+	}
+	return []Event{{Type: EventContent, Text: text}}
 }
 
 // Buffer returns the current unprocessed buffer contents.
@@ -800,6 +778,6 @@ func (p *Parser) IsIdle() bool {
 //	Production code should not need to inspect the buffer.
 //
 // @note The returned string may contain partial tokens at the end.
-func (p *Parser) Buffer() string {
+func (p *KimiParser) Buffer() string {
 	return p.buf
 }

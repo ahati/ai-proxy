@@ -14,7 +14,7 @@ import (
 type OpenAITransformer struct {
 	sseWriter             *transform.SSEWriter
 	formatter             *OpenAIFormatter
-	parser                *Parser
+	parser                *KimiParser
 	glm5Parser            *GLM5Parser
 	messageID             string
 	model                 string
@@ -27,7 +27,7 @@ func NewOpenAITransformer(output io.Writer) *OpenAITransformer {
 	return &OpenAITransformer{
 		sseWriter:  transform.NewSSEWriter(output),
 		formatter:  NewOpenAIFormatter("", ""),
-		parser:     NewParser(DefaultTokens),
+		parser:     NewKimiParser(),
 		glm5Parser: NewGLM5Parser(),
 	}
 }
