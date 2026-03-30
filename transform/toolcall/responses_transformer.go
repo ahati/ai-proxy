@@ -30,7 +30,7 @@ type Usage struct {
 type ResponsesTransformer struct {
 	sseWriter  *transform.SSEWriter
 	formatter  *ResponsesFormatter
-	parser     *Parser
+	parser     *KimiParser
 	messageID  string
 	model      string
 	blockIndex int
@@ -588,7 +588,7 @@ func NewResponsesTransformer(output io.Writer) *ResponsesTransformer {
 	return &ResponsesTransformer{
 		sseWriter:      transform.NewSSEWriter(output),
 		formatter:      NewResponsesFormatter("", ""),
-		parser:         NewParser(DefaultTokens),
+		parser:         NewKimiParser(),
 		glm5Parser:     NewGLM5Parser(),
 		outputItems:    make([]map[string]interface{}, 0),
 		sequenceNumber: 0,
@@ -832,7 +832,6 @@ func (t *ResponsesTransformer) handleContentBlockDelta(event types.Event) error 
 					events := t.glm5Parser.Parse(thinkingDelta.Thinking)
 					// If parser produced events, tool calls were found/extracted
 					if len(events) > 0 {
-						logging.InfoMsg("[%s] GLM-5 tool call markup detected in thinking content, extracting tool calls", t.messageID)
 						for _, e := range events {
 							if e.Type == EventToolStart {
 								logging.InfoMsg("[%s] GLM-5 tool call extracted: id=%s, name=%s", t.messageID, e.ID, e.Name)

@@ -14,21 +14,45 @@ import (
 type OpenAITransformer struct {
 	sseWriter             *transform.SSEWriter
 	formatter             *OpenAIFormatter
-	parser                *Parser
+	kimiParser            *KimiParser
 	glm5Parser            *GLM5Parser
 	messageID             string
 	model                 string
 	inReasoning           bool
 	toolCallTransform     bool
 	glm5ToolCallTransform bool
+
+	// receiver is an optional output destination for chunk JSON
+	// When set, chunks are sent here instead of sseWriter
+	receiver transform.OpenAIChatReceiver
 }
 
 func NewOpenAITransformer(output io.Writer) *OpenAITransformer {
 	return &OpenAITransformer{
 		sseWriter:  transform.NewSSEWriter(output),
 		formatter:  NewOpenAIFormatter("", ""),
-		parser:     NewParser(DefaultTokens),
+		kimiParser: NewKimiParser(),
 		glm5Parser: NewGLM5Parser(),
+	}
+}
+
+// NewOpenAITransformerWithReceiver creates a transformer that sends chunks to a receiver.
+// This enables chaining: OpenAITransformer → OpenAIChatReceiver → target format.
+//
+// @brief Creates a transformer that outputs to an OpenAIChatReceiver.
+//
+// @param receiver The receiver to send chunk JSON to.
+//
+// @return *OpenAITransformer A new transformer instance.
+//
+// @note When using this constructor, the transformer outputs raw chunk JSON
+// (without SSE framing) to the receiver, enabling protocol conversion chains.
+func NewOpenAITransformerWithReceiver(receiver transform.OpenAIChatReceiver) *OpenAITransformer {
+	return &OpenAITransformer{
+		formatter:  NewOpenAIFormatter("", ""),
+		kimiParser: NewKimiParser(),
+		glm5Parser: NewGLM5Parser(),
+		receiver:   receiver,
 	}
 }
 
@@ -48,12 +72,12 @@ func (t *OpenAITransformer) Transform(event *sse.Event) error {
 	}
 
 	if event.Data == "[DONE]" {
-		return t.writeData([]byte("[DONE]"))
+		return t.writeDone()
 	}
 
 	var chunk types.Chunk
 	if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
-		return t.writeData([]byte(event.Data))
+		return t.writeRawData(event.Data)
 	}
 
 	return t.handleChunk(chunk, event.Data)
@@ -69,9 +93,9 @@ func (t *OpenAITransformer) handleChunk(chunk types.Chunk, rawData string) error
 
 	if len(chunk.Choices) == 0 {
 		if chunk.Usage != nil {
-			return t.writeData([]byte(rawData))
+			return t.writeRawData(rawData)
 		}
-		return t.writeData([]byte(rawData))
+		return t.writeRawData(rawData)
 	}
 
 	choice := chunk.Choices[0]
@@ -79,19 +103,19 @@ func (t *OpenAITransformer) handleChunk(chunk types.Chunk, rawData string) error
 
 	if delta.Content != "" {
 		t.inReasoning = false
-		return t.write(t.formatter.FormatContent(delta.Content))
+		return t.writeFormatted(t.formatter.FormatContent(delta.Content))
 	}
 
 	if len(delta.ToolCalls) > 0 {
 		t.inReasoning = false
 		for _, tc := range delta.ToolCalls {
 			if tc.ID != "" && tc.Function.Name != "" {
-				if err := t.write(t.formatter.FormatToolStart(tc.ID, tc.Function.Name, tc.Index)); err != nil {
+				if err := t.writeFormatted(t.formatter.FormatToolStart(tc.ID, tc.Function.Name, tc.Index)); err != nil {
 					return err
 				}
 			}
 			if tc.Function.Arguments != "" {
-				if err := t.write(t.formatter.FormatToolArgs(tc.Function.Arguments, tc.Index)); err != nil {
+				if err := t.writeFormatted(t.formatter.FormatToolArgs(tc.Function.Arguments, tc.Index)); err != nil {
 					return err
 				}
 			}
@@ -110,7 +134,7 @@ func (t *OpenAITransformer) handleChunk(chunk types.Chunk, rawData string) error
 	}
 
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
-		return t.writeData([]byte(rawData))
+		return t.writeRawData(rawData)
 	}
 
 	return nil
@@ -122,7 +146,6 @@ func (t *OpenAITransformer) processText(text string) error {
 		events := t.glm5Parser.Parse(text)
 		// If parser produced events, tool calls were found/extracted
 		if len(events) > 0 {
-			logging.InfoMsg("[%s] GLM-5 tool call markup detected in reasoning content, extracting tool calls", t.messageID)
 			for _, e := range events {
 				if e.Type == EventToolStart {
 					logging.InfoMsg("[%s] GLM-5 tool call extracted: name=%s, id=%s, index=%d", t.messageID, e.Name, e.ID, e.Index)
@@ -139,10 +162,10 @@ func (t *OpenAITransformer) processText(text string) error {
 		}
 	}
 
-	// Check for Kimi-style tool call markup (always try if not idle or contains markup)
-	if !t.parser.IsIdle() || t.parser.tokens.ContainsAny(text) {
+	// Check for Kimi-style tool call markup when enabled
+	if t.toolCallTransform && (!t.kimiParser.IsIdle() || t.kimiParser.tokens.ContainsAny(text)) {
 		logging.InfoMsg("[%s] Tool call markup detected in reasoning content, transforming to tool_calls format", t.messageID)
-		events := t.parser.Parse(text)
+		events := t.kimiParser.Parse(text)
 		for _, e := range events {
 			if err := t.writeEvent(e); err != nil {
 				return err
@@ -152,44 +175,68 @@ func (t *OpenAITransformer) processText(text string) error {
 	}
 
 	if t.inReasoning {
-		return t.write(t.formatter.FormatReasoning(text))
+		return t.writeFormatted(t.formatter.FormatReasoning(text))
 	}
-	return t.write(t.formatter.FormatContent(text))
+	return t.writeFormatted(t.formatter.FormatContent(text))
 }
 
 func (t *OpenAITransformer) writeEvent(e Event) error {
 	switch e.Type {
 	case EventContent:
-		return t.write(t.formatter.FormatContent(e.Text))
+		if t.inReasoning {
+			return t.writeFormatted(t.formatter.FormatReasoning(e.Text))
+		}
+		return t.writeFormatted(t.formatter.FormatContent(e.Text))
 	case EventToolStart:
 		logging.InfoMsg("[%s] Tool call parsed: name=%s, id=%s, index=%d", t.messageID, e.Name, e.ID, e.Index)
-		return t.write(t.formatter.FormatToolStart(e.ID, e.Name, e.Index))
+		return t.writeFormatted(t.formatter.FormatToolStart(e.ID, e.Name, e.Index))
 	case EventToolArgs:
-		return t.write(t.formatter.FormatToolArgs(e.Args, e.Index))
+		return t.writeFormatted(t.formatter.FormatToolArgs(e.Args, e.Index))
 	case EventToolEnd:
-		return t.write(t.formatter.FormatToolEnd(e.Index))
+		return t.writeFormatted(t.formatter.FormatToolEnd(e.Index))
 	case EventSectionEnd:
-		return t.write(t.formatter.FormatSectionEnd())
+		return t.writeFormatted(t.formatter.FormatSectionEnd())
 	}
 	return nil
 }
 
-func (t *OpenAITransformer) write(data []byte) error {
+// writeFormatted writes SSE-formatted data, extracting JSON if using a receiver.
+func (t *OpenAITransformer) writeFormatted(data []byte) error {
 	if len(data) == 0 {
+		return nil
+	}
+	if t.receiver != nil {
+		// Extract JSON from SSE format "data: {...}\n\n"
+		jsonData := transform.ExtractJSONFromSSE(data)
+		if jsonData != "" {
+			return t.receiver.Receive(jsonData)
+		}
 		return nil
 	}
 	_, err := t.sseWriter.WriteRaw(data)
 	return err
 }
 
-func (t *OpenAITransformer) writeData(data []byte) error {
-	return t.sseWriter.WriteData(data)
+// writeRawData writes raw data, adding SSE framing if needed.
+func (t *OpenAITransformer) writeRawData(data string) error {
+	if t.receiver != nil {
+		return t.receiver.Receive(data)
+	}
+	return t.sseWriter.WriteData([]byte(data))
+}
+
+// writeDone signals stream end.
+func (t *OpenAITransformer) writeDone() error {
+	if t.receiver != nil {
+		return t.receiver.ReceiveDone()
+	}
+	return t.sseWriter.WriteData([]byte("[DONE]"))
 }
 
 func (t *OpenAITransformer) Flush() error {
 	// Flush Kimi parser
 	for {
-		events := t.parser.Parse("")
+		events := t.kimiParser.Parse("")
 		if len(events) == 0 {
 			break
 		}
@@ -203,7 +250,7 @@ func (t *OpenAITransformer) Flush() error {
 	for {
 		events := t.glm5Parser.Parse("")
 		if len(events) == 0 {
-			return nil
+			break
 		}
 		for _, e := range events {
 			if err := t.writeEvent(e); err != nil {
@@ -211,6 +258,11 @@ func (t *OpenAITransformer) Flush() error {
 			}
 		}
 	}
+	// Flush receiver if present
+	if t.receiver != nil {
+		return t.receiver.Flush()
+	}
+	return nil
 }
 
 func (t *OpenAITransformer) Close() error {

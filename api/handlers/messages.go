@@ -223,8 +223,8 @@ func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransforme
 		return h.wrapWithWebSearch(transform.NewPassthroughTransformer(w))
 	}
 
-	// Passthrough optimization
-	if h.route.IsPassthrough {
+	// Passthrough optimization (but not if tool call extraction is enabled)
+	if h.route.IsPassthrough && !h.route.KimiToolCallTransform && !h.route.GLM5ToolCallTransform {
 		return h.wrapWithWebSearch(transform.NewPassthroughTransformer(w))
 	}
 
@@ -232,14 +232,27 @@ func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransforme
 
 	switch h.route.OutputProtocol {
 	case "openai":
-		// OpenAI to Anthropic transformer
-		transformer := toolcall.NewAnthropicTransformer(w)
+		// Chain: OpenAI chunks → OpenAITransformer (tool call extraction) → ChatToAnthropicTransformer → Anthropic SSE
+		// This fixes the bug where AnthropicTransformer was incorrectly used for OpenAI input
+		chatToAnthropic := convert.NewChatToAnthropicTransformer(w)
+		transformer := toolcall.NewOpenAITransformerWithReceiver(chatToAnthropic)
 		transformer.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
 		transformer.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
 		baseTransformer = transformer
 	case "anthropic":
-		// Passthrough for native Anthropic
-		baseTransformer = transform.NewPassthroughTransformer(w)
+		// Native Anthropic - use AnthropicTransformer for tool call extraction if enabled
+		if h.route.KimiToolCallTransform || h.route.GLM5ToolCallTransform {
+			transformer := toolcall.NewAnthropicTransformer(w)
+			transformer.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
+			transformer.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
+			baseTransformer = transformer
+		} else {
+			baseTransformer = transform.NewPassthroughTransformer(w)
+		}
+	case "responses":
+		// Responses SSE → ResponsesToAnthropicStreamingTransformer → Anthropic SSE
+		// No tool extraction needed - Responses format already has structured function_call items
+		baseTransformer = convert.NewResponsesToAnthropicStreamingTransformer(w)
 	default:
 		return transform.NewPassthroughTransformer(w)
 	}

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"ai-proxy/logging"
 	"ai-proxy/transform"
@@ -16,11 +15,8 @@ import (
 type AnthropicTransformer struct {
 	sseWriter  *transform.SSEWriter
 	formatter  *AnthropicFormatter
-	state      anthropicState
-	buf        string
 	toolIndex  int
 	blockIndex int
-	currentID  string
 	messageID  string
 
 	inThinking       bool
@@ -36,25 +32,41 @@ type AnthropicTransformer struct {
 	glm5ToolCallTransform bool
 
 	// Kimi tool call extraction
+	kmiParser             *KimiParser
 	kimiToolCallTransform bool
+
+	// receiver is an optional output destination for Anthropic event JSON
+	// When set, events are sent here instead of sseWriter
+	receiver transform.AnthropicEventReceiver
 }
-
-type anthropicState int
-
-const (
-	anthropicStateIdle anthropicState = iota
-	anthropicStateInSection
-	anthropicStateReadingID
-	anthropicStateReadingArgs
-	anthropicStateTrailing
-)
 
 func NewAnthropicTransformer(output io.Writer) *AnthropicTransformer {
 	return &AnthropicTransformer{
-		sseWriter:  transform.NewSSEWriter(output),
-		formatter:  NewAnthropicFormatter("", ""),
-		state:      anthropicStateIdle,
-		glm5Parser: NewGLM5Parser(),
+		sseWriter:             transform.NewSSEWriter(output),
+		formatter:             NewAnthropicFormatter("", ""),
+		glm5Parser:            NewGLM5Parser(),
+		glm5ToolCallTransform: false,
+		kmiParser:             NewKimiParser(),
+		kimiToolCallTransform: false,
+	}
+}
+
+// NewAnthropicTransformerWithReceiver creates a transformer that sends events to a receiver.
+// This enables chaining: AnthropicTransformer → AnthropicEventReceiver → target format.
+//
+// @brief Creates a transformer that outputs to an AnthropicEventReceiver.
+//
+// @param receiver The receiver to send event JSON to.
+//
+// @return *AnthropicTransformer A new transformer instance.
+func NewAnthropicTransformerWithReceiver(receiver transform.AnthropicEventReceiver) *AnthropicTransformer {
+	return &AnthropicTransformer{
+		formatter:             NewAnthropicFormatter("", ""),
+		glm5Parser:            NewGLM5Parser(),
+		glm5ToolCallTransform: false,
+		kmiParser:             NewKimiParser(),
+		kimiToolCallTransform: false,
+		receiver:              receiver,
 	}
 }
 
@@ -74,7 +86,7 @@ func (t *AnthropicTransformer) Transform(event *sse.Event) error {
 	}
 
 	if event.Data == "[DONE]" {
-		return t.writeData([]byte("[DONE]"))
+		return t.writeDone()
 	}
 
 	var anthropicEvent types.Event
@@ -115,16 +127,13 @@ func (t *AnthropicTransformer) handleMessageStart(event types.Event, rawJSON []b
 		t.formatter.SetModel(event.Message.Model)
 	}
 
-	// Work with raw JSON to preserve all fields and handle flexible usage formats
 	var rawData map[string]interface{}
 	if err := json.Unmarshal(rawJSON, &rawData); err != nil {
 		return t.writePassthrough(event.Type, rawJSON)
 	}
 
-	// Normalize usage in message object
 	if message, ok := rawData["message"].(map[string]interface{}); ok {
 		if usage, ok := message["usage"].(map[string]interface{}); ok {
-			// Normalize field names to Anthropic format
 			if _, hasInputTokens := usage["input_tokens"]; !hasInputTokens {
 				if promptTokens, exists := usage["prompt_tokens"]; exists {
 					usage["input_tokens"] = promptTokens
@@ -240,15 +249,7 @@ func (t *AnthropicTransformer) handleContentBlockStop(event types.Event) error {
 
 func (t *AnthropicTransformer) handleThinkingBlockStop(event types.Event) error {
 	t.inThinking = false
-	if t.buf != "" {
-		idx := 0
-		if event.Index != nil {
-			idx = *event.Index
-		}
-		t.flushRemainingThinking(idx)
-	}
-	t.buf = ""
-	t.state = anthropicStateIdle
+	t.flushActiveParser(true, t.thinkingIndex)
 	if t.needThinkingStop {
 		t.write(t.makeThinkingBlockStop(t.thinkingIndex))
 		t.needThinkingStop = false
@@ -258,15 +259,7 @@ func (t *AnthropicTransformer) handleThinkingBlockStop(event types.Event) error 
 
 func (t *AnthropicTransformer) handleTextBlockStop(event types.Event) error {
 	t.inText = false
-	if t.buf != "" {
-		idx := 0
-		if event.Index != nil {
-			idx = *event.Index
-		}
-		t.flushRemainingText(idx)
-	}
-	t.buf = ""
-	t.state = anthropicStateIdle
+	t.flushActiveParser(false, t.textIndex)
 	if t.needTextStop {
 		t.write(t.makeTextBlockStop(t.textIndex))
 		t.needTextStop = false
@@ -274,16 +267,28 @@ func (t *AnthropicTransformer) handleTextBlockStop(event types.Event) error {
 	return nil
 }
 
+func (t *AnthropicTransformer) flushActiveParser(isThinking bool, index int) {
+	var events []Event
+	if t.glm5ToolCallTransform {
+		events = t.glm5Parser.ForceFlush()
+	} else if t.kimiToolCallTransform {
+		events = t.kmiParser.ForceFlush()
+	}
+	if len(events) == 0 {
+		return
+	}
+	for _, chunk := range t.convertEventsToAnthropic(events, isThinking, index) {
+		t.write(chunk)
+	}
+}
+
 func (t *AnthropicTransformer) handleMessageDelta(event types.Event, rawJSON []byte) error {
-	// Work with raw JSON to preserve all fields and handle flexible usage formats
 	var rawData map[string]interface{}
 	if err := json.Unmarshal(rawJSON, &rawData); err != nil {
 		return t.writePassthrough(event.Type, rawJSON)
 	}
 
-	// Normalize usage at top level
 	if usage, ok := rawData["usage"].(map[string]interface{}); ok {
-		// Normalize field names to Anthropic format
 		if _, hasOutputTokens := usage["output_tokens"]; !hasOutputTokens {
 			if completionTokens, exists := usage["completion_tokens"]; exists {
 				usage["output_tokens"] = completionTokens
@@ -299,7 +304,6 @@ func (t *AnthropicTransformer) handleMessageDelta(event types.Event, rawJSON []b
 		delete(usage, "total_tokens")
 	}
 
-	// Handle stop_reason conversion for tool calls
 	if t.toolsEmitted {
 		if delta, ok := rawData["delta"].(map[string]interface{}); ok {
 			if stopReason, exists := delta["stop_reason"].(string); exists && stopReason == "end_turn" {
@@ -314,266 +318,89 @@ func (t *AnthropicTransformer) handleMessageDelta(event types.Event, rawJSON []b
 }
 
 func (t *AnthropicTransformer) processThinking(text string, index int) [][]byte {
-	// If GLM-5 transformation is enabled, use GLM-5 parser exclusively
 	if t.glm5ToolCallTransform {
 		events := t.glm5Parser.Parse(text)
 		if len(events) > 0 {
-			logging.InfoMsg("[%s] GLM-5 tool call markup detected in thinking content, extracting tool calls", t.messageID)
-			return t.convertGLM5EventsToAnthropic(events, index)
+			return t.convertEventsToAnthropic(events, true, index)
 		}
-		// If parser might be parsing (buffering partial tag), don't emit as reasoning
-		if t.glm5Parser.IsPotentiallyParsing() {
-			return nil
-		}
-		// No tool calls found and not parsing - emit as regular thinking
-		return [][]byte{t.makeThinkingDelta(index, text)}
+		return nil
 	}
 
-	// Otherwise, use Kimi-style parsing if enabled
-	if !t.kimiToolCallTransform {
-		// No tool call transformation enabled - pass through as regular thinking
-		return [][]byte{t.makeThinkingDelta(index, text)}
-	}
-
-	t.buf += text
-	var out [][]byte
-
-	for {
-		switch t.state {
-		case anthropicStateIdle:
-			idx := strings.Index(t.buf, "<|tool_calls_section_begin|>")
-			if idx < 0 {
-				return out
-			}
-			logging.InfoMsg("[%s] Tool call markup detected in thinking block, transforming to tool_use events", t.messageID)
-			if idx > 0 {
-				out = append(out, t.makeThinkingDelta(index, t.buf[:idx]))
-			}
-			t.buf = t.buf[idx+len("<|tool_calls_section_begin|>"):]
-			t.state = anthropicStateInSection
-			if t.needThinkingStop {
-				out = append(out, t.makeThinkingBlockStop(t.thinkingIndex))
-				t.needThinkingStop = false
-			}
-
-		case anthropicStateInSection:
-			idx := strings.Index(t.buf, "<|tool_call_begin|>")
-			endIdx := strings.Index(t.buf, "<|tool_calls_section_end|>")
-
-			if endIdx >= 0 && (idx < 0 || endIdx < idx) {
-				t.buf = t.buf[endIdx+len("<|tool_calls_section_end|>"):]
-				t.state = anthropicStateTrailing
-				if t.buf != "" {
-					t.thinkingIndex = t.blockIndex
-					t.blockIndex++
-					out = append(out, t.makeThinkingBlockStart(t.thinkingIndex))
-					out = append(out, t.makeThinkingDelta(t.thinkingIndex, t.buf))
-					t.needThinkingStop = true
-					t.buf = ""
-				}
-				return out
-			}
-			if idx < 0 {
-				return out
-			}
-			t.buf = t.buf[idx+len("<|tool_call_begin|>"):]
-			t.state = anthropicStateReadingID
-
-		case anthropicStateReadingID:
-			argIdx := strings.Index(t.buf, "<|tool_call_argument_begin|>")
-			if argIdx < 0 {
-				return out
-			}
-			rawID := strings.TrimSpace(t.buf[:argIdx])
-			t.currentID = parseToolCallID(rawID, t.toolIndex)
-			name := parseFunctionName(rawID)
-			logging.InfoMsg("[%s] Tool call parsed: name=%s, id=%s, blockIndex=%d", t.messageID, name, t.currentID, t.blockIndex+1)
-			t.buf = t.buf[argIdx+len("<|tool_call_argument_begin|>"):]
-			t.state = anthropicStateReadingArgs
-			t.blockIndex++
-			out = append(out, t.makeToolUseBlockStart(name))
-
-		case anthropicStateReadingArgs:
-			endIdx := strings.Index(t.buf, "<|tool_call_end|>")
-			if endIdx < 0 {
-				if t.buf != "" {
-					out = append(out, t.makeInputJSONDelta(t.buf))
-					t.buf = ""
-				}
-				return out
-			}
-			args := t.buf[:endIdx]
-			if args != "" {
-				out = append(out, t.makeInputJSONDelta(args))
-			}
-			out = append(out, t.makeContentBlockStop())
-			t.buf = t.buf[endIdx+len("<|tool_call_end|>"):]
-			t.toolIndex++
-			t.state = anthropicStateInSection
-
-		case anthropicStateTrailing:
-			idx := strings.Index(t.buf, "<|tool_calls_section_begin|>")
-			if idx >= 0 {
-				if idx > 0 {
-					out = append(out, t.makeThinkingDelta(index, t.buf[:idx]))
-				}
-				t.buf = t.buf[idx+len("<|tool_calls_section_begin|>"):]
-				t.state = anthropicStateInSection
-				continue
-			}
-			if t.buf != "" {
-				out = append(out, t.makeThinkingDelta(index, t.buf))
-			}
-			return out
+	if t.kimiToolCallTransform {
+		events := t.kmiParser.Parse(text)
+		if len(events) > 0 {
+			return t.convertEventsToAnthropic(events, true, index)
 		}
+		return nil
 	}
+
+	return [][]byte{t.makeThinkingDelta(index, text)}
 }
 
-// convertGLM5EventsToAnthropic converts GLM-5 parser events to Anthropic format events.
-// GLM-5 events (EventToolStart, EventToolArgs, EventToolEnd) are converted to
-// Anthropic tool_use content blocks.
-func (t *AnthropicTransformer) convertGLM5EventsToAnthropic(events []Event, index int) [][]byte {
+func (t *AnthropicTransformer) processText(text string, index int) [][]byte {
+	// if t.glm5ToolCallTransform {
+	// 	events := t.glm5Parser.Parse(text)
+	// 	if len(events) > 0 {
+	// 		return t.convertEventsToAnthropic(events, false, index)
+	// 	}
+	// 	return nil
+	// }
+
+	// if t.kimiToolCallTransform {
+	// 	events := t.kmiParser.Parse(text)
+	// 	if len(events) > 0 {
+	// 		return t.convertEventsToAnthropic(events, false, index)
+	// 	}
+	// 	return nil
+	// }
+
+	return [][]byte{t.makeTextDelta(index, text)}
+}
+
+func (t *AnthropicTransformer) convertEventsToAnthropic(events []Event, isThinking bool, index int) [][]byte {
 	var out [][]byte
 
 	for _, e := range events {
 		switch e.Type {
 		case EventContent:
-			// Regular thinking content - emit as thinking delta
 			if e.Text != "" {
-				out = append(out, t.makeThinkingDelta(index, e.Text))
+				if isThinking {
+					out = append(out, t.makeThinkingDelta(index, e.Text))
+				} else {
+					out = append(out, t.makeTextDelta(index, e.Text))
+				}
 			}
 		case EventToolStart:
-			// Start a new tool_use block
-			logging.InfoMsg("[%s] GLM-5 tool call extracted: name=%s, id=%s, blockIndex=%d", t.messageID, e.Name, e.ID, t.blockIndex)
-			t.currentID = e.ID
-			out = append(out, t.makeToolUseBlockStart(e.Name))
+			logging.InfoMsg("[%s] Tool call extracted: name=%s, id=%s, blockIndex=%d", t.messageID, e.Name, e.ID, t.blockIndex+1)
+			if isThinking && t.needThinkingStop {
+				out = append(out, t.makeThinkingBlockStop(t.thinkingIndex))
+				t.needThinkingStop = false
+			} else if !isThinking && t.needTextStop {
+				out = append(out, t.makeTextBlockStop(t.textIndex))
+				t.needTextStop = false
+			}
+			out = append(out, t.makeToolUseBlockStart(e.ID, e.Name))
 		case EventToolArgs:
-			// Emit tool arguments as input_json_delta
 			out = append(out, t.makeInputJSONDelta(e.Args))
 		case EventToolEnd:
-			// End the tool_use block
 			out = append(out, t.makeContentBlockStop())
 			t.toolIndex++
+		case EventSectionEnd:
+			if isThinking {
+				t.thinkingIndex = t.blockIndex
+				t.blockIndex++
+				out = append(out, t.makeThinkingBlockStart(t.thinkingIndex))
+				t.needThinkingStop = true
+			} else {
+				t.textIndex = t.blockIndex
+				t.blockIndex++
+				out = append(out, t.makeTextBlockStart(t.textIndex))
+				t.needTextStop = true
+			}
 		}
 	}
 
 	return out
-}
-
-func (t *AnthropicTransformer) processText(text string, index int) [][]byte {
-	// If GLM-5 transformation is enabled, use GLM-5 parser exclusively
-	if t.glm5ToolCallTransform {
-		events := t.glm5Parser.Parse(text)
-		if len(events) > 0 {
-			return t.convertGLM5EventsToAnthropic(events, index)
-		}
-		// If parser might be parsing (buffering partial tag), don't emit as text
-		if t.glm5Parser.IsPotentiallyParsing() {
-			return nil
-		}
-		// No tool calls found and not parsing - emit as regular text
-		return [][]byte{t.makeTextDelta(index, text)}
-	}
-
-	// Otherwise, use Kimi-style parsing if enabled
-	if !t.kimiToolCallTransform {
-		// No tool call transformation enabled - pass through as regular text
-		return [][]byte{t.makeTextDelta(index, text)}
-	}
-
-	t.buf += text
-	var out [][]byte
-
-	for {
-		switch t.state {
-		case anthropicStateIdle:
-			idx := strings.Index(t.buf, "<|tool_calls_section_begin|>")
-			if idx < 0 {
-				return out
-			}
-			logging.InfoMsg("[%s] Tool call markup detected in text block, transforming to tool_use events", t.messageID)
-			if idx > 0 {
-				out = append(out, t.makeTextDelta(index, t.buf[:idx]))
-			}
-			t.buf = t.buf[idx+len("<|tool_calls_section_begin|>"):]
-			t.state = anthropicStateInSection
-			if t.needTextStop {
-				out = append(out, t.makeTextBlockStop(t.textIndex))
-				t.needTextStop = false
-				t.blockIndex++
-			}
-
-		case anthropicStateInSection:
-			idx := strings.Index(t.buf, "<|tool_call_begin|>")
-			endIdx := strings.Index(t.buf, "<|tool_calls_section_end|>")
-
-			if endIdx >= 0 && (idx < 0 || endIdx < idx) {
-				t.buf = t.buf[endIdx+len("<|tool_calls_section_end|>"):]
-				t.state = anthropicStateTrailing
-				if t.buf != "" {
-					t.textIndex = t.blockIndex
-					t.blockIndex++
-					out = append(out, t.makeTextBlockStart(t.textIndex))
-					out = append(out, t.makeTextDelta(t.textIndex, t.buf))
-					t.needTextStop = true
-					t.buf = ""
-				}
-				return out
-			}
-			if idx < 0 {
-				return out
-			}
-			t.buf = t.buf[idx+len("<|tool_call_begin|>"):]
-			t.state = anthropicStateReadingID
-
-		case anthropicStateReadingID:
-			argIdx := strings.Index(t.buf, "<|tool_call_argument_begin|>")
-			if argIdx < 0 {
-				return out
-			}
-			rawID := strings.TrimSpace(t.buf[:argIdx])
-			t.currentID = parseToolCallID(rawID, t.toolIndex)
-			name := parseFunctionName(rawID)
-			logging.InfoMsg("[%s] Tool call parsed: name=%s, id=%s, blockIndex=%d", t.messageID, name, t.currentID, t.blockIndex+1)
-			t.buf = t.buf[argIdx+len("<|tool_call_argument_begin|>"):]
-			t.state = anthropicStateReadingArgs
-			t.blockIndex++
-			out = append(out, t.makeToolUseBlockStart(name))
-
-		case anthropicStateReadingArgs:
-			endIdx := strings.Index(t.buf, "<|tool_call_end|>")
-			if endIdx < 0 {
-				if t.buf != "" {
-					out = append(out, t.makeInputJSONDelta(t.buf))
-					t.buf = ""
-				}
-				return out
-			}
-			args := t.buf[:endIdx]
-			if args != "" {
-				out = append(out, t.makeInputJSONDelta(args))
-			}
-			out = append(out, t.makeContentBlockStop())
-			t.buf = t.buf[endIdx+len("<|tool_call_end|>"):]
-			t.toolIndex++
-			t.state = anthropicStateInSection
-
-		case anthropicStateTrailing:
-			idx := strings.Index(t.buf, "<|tool_calls_section_begin|>")
-			if idx >= 0 {
-				if idx > 0 {
-					out = append(out, t.makeTextDelta(index, t.buf[:idx]))
-				}
-				t.buf = t.buf[idx+len("<|tool_calls_section_begin|>"):]
-				t.state = anthropicStateInSection
-				continue
-			}
-			if t.buf != "" {
-				out = append(out, t.makeTextDelta(index, t.buf))
-			}
-			return out
-		}
-	}
 }
 
 func (t *AnthropicTransformer) makeThinkingDelta(index int, thinking string) []byte {
@@ -628,12 +455,12 @@ func (t *AnthropicTransformer) makeTextBlockStop(index int) []byte {
 	return serializeAnthropicEvent(event)
 }
 
-func (t *AnthropicTransformer) makeToolUseBlockStart(name string) []byte {
+func (t *AnthropicTransformer) makeToolUseBlockStart(id, name string) []byte {
 	t.toolsEmitted = true
 	event := types.Event{
 		Type:         "content_block_start",
 		Index:        intPtr(t.blockIndex),
-		ContentBlock: json.RawMessage(fmt.Sprintf(`{"type":"tool_use","id":%q,"name":%q,"input":{}}`, t.currentID, name)),
+		ContentBlock: json.RawMessage(fmt.Sprintf(`{"type":"tool_use","id":%q,"name":%q,"input":{}}`, id, name)),
 	}
 	return serializeAnthropicEvent(event)
 }
@@ -655,26 +482,16 @@ func (t *AnthropicTransformer) makeContentBlockStop() []byte {
 	return serializeAnthropicEvent(event)
 }
 
-func (t *AnthropicTransformer) flushRemainingThinking(index int) {
-	event := types.Event{
-		Type:  "content_block_delta",
-		Index: intPtr(index),
-		Delta: json.RawMessage(fmt.Sprintf(`{"type":"thinking_delta","thinking":%q}`, t.buf)),
-	}
-	t.write(serializeAnthropicEvent(event))
-}
-
-func (t *AnthropicTransformer) flushRemainingText(index int) {
-	event := types.Event{
-		Type:  "content_block_delta",
-		Index: intPtr(index),
-		Delta: json.RawMessage(fmt.Sprintf(`{"type":"text_delta","text":%q}`, t.buf)),
-	}
-	t.write(serializeAnthropicEvent(event))
-}
-
 func (t *AnthropicTransformer) write(data []byte) error {
 	if len(data) == 0 {
+		return nil
+	}
+	if t.receiver != nil {
+		// Extract event JSON from SSE format "event: type\ndata: {...}\n\n"
+		_, jsonData := transform.ExtractAnthropicEventFromSSE(data)
+		if jsonData != "" {
+			return t.receiver.Receive(jsonData)
+		}
 		return nil
 	}
 	_, err := t.sseWriter.WriteRaw(data)
@@ -682,65 +499,76 @@ func (t *AnthropicTransformer) write(data []byte) error {
 }
 
 func (t *AnthropicTransformer) writeData(data []byte) error {
+	if t.receiver != nil {
+		return t.receiver.Receive(string(data))
+	}
 	return t.sseWriter.WriteData(data)
+}
+
+// writeDone signals stream end.
+//
+// @brief Writes the [DONE] marker or signals completion to receiver.
+//
+// @return error Returns nil on success.
+//
+// @note When receiver is set, calls ReceiveDone() instead of writing [DONE].
+// This is critical for converter chains to properly emit final output.
+func (t *AnthropicTransformer) writeDone() error {
+	if t.receiver != nil {
+		return t.receiver.ReceiveDone()
+	}
+	return t.sseWriter.WriteData([]byte("[DONE]"))
 }
 
 func (t *AnthropicTransformer) writePassthrough(eventType string, data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
+	if t.receiver != nil {
+		// For passthrough, send the JSON data as-is
+		return t.receiver.Receive(string(data))
+	}
 	return t.sseWriter.WriteEvent(eventType, data)
 }
 
 func (t *AnthropicTransformer) Flush() error {
-	// Flush any pending GLM-5 parser state
+	isThinking := t.inThinking || !t.inText
+	index := t.thinkingIndex
+	if t.inText {
+		index = t.textIndex
+	}
+
 	if t.glm5ToolCallTransform {
-		events := t.glm5Parser.Parse("")
+		events := t.glm5Parser.ForceFlush()
 		if len(events) > 0 {
-			// Determine which index to use based on current context
-			index := t.thinkingIndex
-			if t.inText {
-				index = t.textIndex
-			}
-			anthropicEvents := t.convertGLM5EventsToAnthropic(events, index)
-			for _, e := range anthropicEvents {
-				t.write(e)
+			for _, chunk := range t.convertEventsToAnthropic(events, isThinking, index) {
+				t.write(chunk)
 			}
 		}
 	}
 
-	if t.buf == "" {
-		return nil
-	}
-
-	if t.inThinking {
-		t.flushRemainingThinking(t.thinkingIndex)
-	} else if t.inText {
-		t.flushRemainingText(t.textIndex)
-	} else {
-		switch t.state {
-		case anthropicStateIdle, anthropicStateTrailing:
-			t.thinkingIndex = t.blockIndex
-			t.blockIndex++
-			t.write(t.makeThinkingBlockStart(t.thinkingIndex))
-			t.flushRemainingThinking(t.thinkingIndex)
-			t.write(t.makeThinkingBlockStop(t.thinkingIndex))
-		case anthropicStateInSection, anthropicStateReadingID, anthropicStateReadingArgs:
-			t.thinkingIndex = t.blockIndex
-			t.blockIndex++
-			t.write(t.makeThinkingBlockStart(t.thinkingIndex))
-			debugContent := fmt.Sprintf("[INCOMPLETE TOOL CALL - state=%d] %s", t.state, t.buf)
-			event := types.Event{
-				Type:  "content_block_delta",
-				Index: intPtr(t.thinkingIndex),
-				Delta: json.RawMessage(fmt.Sprintf(`{"type":"thinking_delta","thinking":%q}`, debugContent)),
+	if t.kimiToolCallTransform {
+		events := t.kmiParser.ForceFlush()
+		if len(events) > 0 {
+			for _, chunk := range t.convertEventsToAnthropic(events, isThinking, index) {
+				t.write(chunk)
 			}
-			t.write(serializeAnthropicEvent(event))
-			t.write(t.makeThinkingBlockStop(t.thinkingIndex))
 		}
 	}
 
-	t.buf = ""
+	if t.needThinkingStop {
+		t.write(t.makeThinkingBlockStop(t.thinkingIndex))
+		t.needThinkingStop = false
+	}
+	if t.needTextStop {
+		t.write(t.makeTextBlockStop(t.textIndex))
+		t.needTextStop = false
+	}
+
+	// Flush receiver if present
+	if t.receiver != nil {
+		return t.receiver.Flush()
+	}
 	return nil
 }
 
@@ -748,14 +576,10 @@ func (t *AnthropicTransformer) Close() error {
 	return t.Flush()
 }
 
-// Initialize is called before the upstream request to perform any setup.
-// For AnthropicTransformer, this is a no-op as initialization happens on first event.
 func (t *AnthropicTransformer) Initialize() error {
 	return nil
 }
 
-// HandleCancel handles cancellation requests.
-// For AnthropicTransformer, this is a no-op.
 func (t *AnthropicTransformer) HandleCancel() error {
 	return nil
 }

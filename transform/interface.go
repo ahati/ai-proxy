@@ -155,3 +155,93 @@ type FlushingWriter interface {
 	//       essential for real-time streaming of LLM responses.
 	Flush() error
 }
+
+// OpenAIChatReceiver receives OpenAI Chat Completion chunk JSON strings.
+// It enables chaining transformers with converters without intermediate SSE serialization.
+//
+// @brief Interface for receiving OpenAI Chat Completion chunks as JSON strings.
+//
+// @note This interface enables the chain pattern:
+//
+//	Transformer (parses upstream, extracts tool calls) → OpenAIChatReceiver (converts to target format)
+//
+// @note The chunkJSON is the raw JSON of a types.Chunk, WITHOUT SSE framing (no "data: " prefix).
+//
+// @pre The receiver must be properly initialized.
+// @post After ReceiveDone(), the receiver should flush and finalize output.
+type OpenAIChatReceiver interface {
+	// Receive processes a single OpenAI Chat Completion chunk.
+	//
+	// @brief Processes a Chat Completion chunk JSON string.
+	//
+	// @param chunkJSON The raw JSON of a types.Chunk (without SSE framing).
+	//                  Format: {"id":"...","object":"chat.completion.chunk",...}
+	//                  Must be valid JSON.
+	//
+	// @return error Returns nil on success.
+	//               Returns error if:
+	//               - JSON is malformed
+	//               - Output write fails
+	//
+	// @pre chunkJSON must be valid OpenAI Chunk JSON.
+	// @post The chunk is converted and written to the target format.
+	Receive(chunkJSON string) error
+
+	// ReceiveDone signals the end of the stream.
+	//
+	// @brief Signals stream termination, triggering final events/cleanup.
+	//
+	// @return error Returns nil on success.
+	//               Returns error if final event emission fails.
+	//
+	// @pre All chunks have been received via Receive().
+	// @post Final events (message_stop, message_delta, etc.) are emitted.
+	ReceiveDone() error
+
+	// Flush writes any buffered data.
+	//
+	// @brief Flushes buffered content to the underlying writer.
+	//
+	// @return error Returns nil on success.
+	//
+	// @pre The receiver is not closed.
+	// @post All buffered data is written.
+	Flush() error
+}
+
+// AnthropicEventReceiver receives Anthropic SSE event JSON strings.
+// It enables chaining transformers with converters for Anthropic-format streams.
+//
+// @brief Interface for receiving Anthropic SSE events as JSON strings.
+//
+// @note This interface enables the chain pattern for Anthropic→other conversions.
+//
+// @note The eventJSON is the raw JSON of a types.Event, WITHOUT SSE framing.
+type AnthropicEventReceiver interface {
+	// Receive processes a single Anthropic SSE event.
+	//
+	// @brief Processes an Anthropic event JSON string.
+	//
+	// @param eventJSON The raw JSON of a types.Event (without SSE framing).
+	//                  Format: {"type":"message_start",...} or {"type":"content_block_delta",...}
+	//                  Must be valid JSON.
+	//
+	// @return error Returns nil on success.
+	//               Returns error if JSON is malformed or output write fails.
+	//
+	// @pre eventJSON must be valid Anthropic Event JSON.
+	// @post The event is converted and written to the target format.
+	Receive(eventJSON string) error
+
+	// ReceiveDone signals the end of the stream.
+	//
+	// @brief Signals stream termination, triggering final events/cleanup.
+	//
+	// @return error Returns nil on success.
+	ReceiveDone() error
+
+	// Flush writes any buffered data.
+	//
+	// @brief Flushes buffered content to the underlying writer.
+	Flush() error
+}

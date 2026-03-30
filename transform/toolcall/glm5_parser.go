@@ -304,6 +304,18 @@ func (p *GLM5Parser) IsPotentiallyParsing() bool {
 	return p.state != glm5StateIdle || p.buf != ""
 }
 
+// ForceFlush emits any buffered content as a single EventContent and resets
+// the parser to idle state. This is used when a content block ends to ensure
+// no partial data is lost.
+func (p *GLM5Parser) ForceFlush() []Event {
+	if p.state == glm5StateIdle && p.buf == "" {
+		return nil
+	}
+	text := p.buf
+	p.Reset()
+	return []Event{{Type: EventContent, Text: text}}
+}
+
 // Reset clears the parser state for reuse.
 func (p *GLM5Parser) Reset() {
 	p.state = glm5StateIdle

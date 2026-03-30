@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"ai-proxy/conversation"
+	"ai-proxy/transform/toolcall"
 	"ai-proxy/types"
 
 	"github.com/tmaxmax/go-sse"
@@ -1021,7 +1022,9 @@ func TestChatToResponsesTransformer_ToolCallsInReasoning(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			transformer := NewChatToResponsesTransformer(&buf)
+			// Use chain: OpenAITransformer → ChatToResponsesTransformer
+			chatToResponses := NewChatToResponsesTransformer(&buf)
+			transformer := toolcall.NewOpenAITransformerWithReceiver(chatToResponses)
 			transformer.SetKimiToolCallTransform(tt.toolCallTransform)
 
 			for _, chunk := range tt.chunks {

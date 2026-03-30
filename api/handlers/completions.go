@@ -224,8 +224,12 @@ func (h *CompletionsHandler) CreateTransformer(w io.Writer) transform.SSETransfo
 
 	switch h.route.OutputProtocol {
 	case "anthropic":
-		// Convert Anthropic responses back to OpenAI Chat format
-		return convert.NewChatToAnthropicTransformer(w)
+		// Chain: Anthropic SSE → AnthropicTransformer (tool extraction) → AnthropicToChatStreamingConverter → OpenAI chunks
+		chatConverter := convert.NewAnthropicToChatStreamingConverter(w)
+		transformer := toolcall.NewAnthropicTransformerWithReceiver(chatConverter)
+		transformer.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
+		transformer.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
+		return transformer
 	case "openai":
 		// Use OpenAI transformer for tool call handling
 		if h.route.KimiToolCallTransform || h.route.GLM5ToolCallTransform {
@@ -236,8 +240,9 @@ func (h *CompletionsHandler) CreateTransformer(w io.Writer) transform.SSETransfo
 		}
 		return transform.NewPassthroughTransformer(w)
 	case "responses":
-		// Convert Responses SSE back to Chat Completions format
-		return convert.NewChatToResponsesTransformer(w)
+		// Responses SSE → ResponsesToChatTransformer → OpenAI chunks
+		// No tool extraction needed - Responses format already has structured function_call items
+		return convert.NewResponsesToChatTransformer(w)
 	default:
 		return transform.NewPassthroughTransformer(w)
 	}
