@@ -8,13 +8,12 @@ import (
 	"net/http"
 	"strings"
 
+	"ai-proxy/api/pipeline"
 	"ai-proxy/capture"
 	"ai-proxy/config"
 	"ai-proxy/convert"
 	"ai-proxy/router"
 	"ai-proxy/transform"
-	"ai-proxy/transform/toolcall"
-	wstransform "ai-proxy/transform/websearch"
 	"ai-proxy/types"
 	"ai-proxy/websearch"
 
@@ -248,60 +247,26 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 		return transform.NewPassthroughTransformer(w)
 	}
 
-	// Passthrough: no transformation needed
-	if h.route.IsPassthrough && !h.route.KimiToolCallTransform {
-		return h.wrapWithWebSearch(transform.NewPassthroughTransformer(w))
+	cfg := transform.Config{
+		UpstreamFormat:         h.route.OutputProtocol,
+		DownstreamFormat:       "responses",
+		KimiToolCallTransform:  h.route.KimiToolCallTransform,
+		GLM5ToolCallTransform:  h.route.GLM5ToolCallTransform,
+		ReasoningSplit:         h.route.ReasoningSplit,
+		WebSearchEnabled:       websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled(),
+		InputItems:             h.inputItems,
+		Store:                  h.shouldStore,
+		PreviousResponseID:     h.previousResponseID,
+		ReasoningSummaryMode:   h.reasoningSummaryMode,
+		EncryptedReasoning:     h.encryptedReasoning,
 	}
 
-	var baseTransformer transform.SSETransformer
-
-	switch h.route.OutputProtocol {
-	case "openai":
-		// Chain: OpenAI chunks → OpenAITransformer (tool extraction) → ChatToResponsesTransformer → Responses SSE
-		chatToResponses := convert.NewChatToResponsesTransformer(w)
-		chatToResponses.SetInputItems(h.inputItems)
-		chatToResponses.SetStore(h.shouldStore)
-		chatToResponses.SetPreviousResponseID(h.previousResponseID)
-		chatToResponses.SetReasoningSummaryMode(h.reasoningSummaryMode)
-		chatToResponses.SetEncryptedReasoning(h.encryptedReasoning)
-		transformer := toolcall.NewOpenAITransformerWithReceiver(chatToResponses)
-		transformer.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
-		transformer.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
-		baseTransformer = transformer
-	case "anthropic":
-		// ResponsesTransformer converts Anthropic SSE to Responses format
-		// This conversion is always needed for /v1/responses endpoint
-		// Tool call extraction from markup is enabled when tool_call_transform is true
-		t := toolcall.NewResponsesTransformer(w)
-		t.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
-		t.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
-		t.SetInputItems(h.inputItems)
-		t.SetStore(h.shouldStore)
-		t.SetPreviousResponseID(h.previousResponseID)
-		t.SetReasoningSummaryMode(h.reasoningSummaryMode)
-		t.SetEncryptedReasoning(h.encryptedReasoning)
-		baseTransformer = t
-	default:
+	t, err := pipeline.BuildPipeline(w, cfg)
+	if err != nil {
+		// Fallback to passthrough on error
 		return transform.NewPassthroughTransformer(w)
 	}
-
-	// Wrap with web search transformer if enabled
-	return h.wrapWithWebSearch(baseTransformer)
-}
-
-// wrapWithWebSearch wraps the base transformer with web search interception if enabled.
-//
-// @param base - The base transformer to wrap.
-// @return The wrapped transformer, or the base transformer if web search is not enabled.
-func (h *ResponsesHandler) wrapWithWebSearch(base transform.SSETransformer) transform.SSETransformer {
-	// Get the web search adapter (returns nil if service is not enabled)
-	adapter := websearch.GetDefaultAdapter()
-	if adapter == nil || !adapter.IsEnabled() {
-		return base
-	}
-
-	// Wrap the base transformer with web search interception
-	return wstransform.NewTransformer(base, adapter)
+	return t
 }
 
 // WriteError sends an error response in OpenAI Responses API format.

@@ -280,3 +280,25 @@ func (t *OpenAITransformer) Initialize() error {
 func (t *OpenAITransformer) HandleCancel() error {
 	return nil
 }
+
+// Process handles a PipelineEvent by parsing the chunk and delegating to the
+// existing Transform logic. This implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for OpenAI chunk events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *OpenAITransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventOpenAIChunk:
+		return t.Transform(&sse.Event{Data: string(event.Data)})
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return nil
+	}
+}
+
+// compile-time check that OpenAITransformer implements Stage.
+var _ transform.Stage = (*OpenAITransformer)(nil)

@@ -12,6 +12,7 @@ import (
 	"ai-proxy/conversation"
 	"ai-proxy/logging"
 	"ai-proxy/summarizer"
+	"ai-proxy/transform"
 	"ai-proxy/types"
 
 	"github.com/tmaxmax/go-sse"
@@ -1163,26 +1164,47 @@ func (t *ChatToResponsesTransformer) EmitError(streamErr error) error {
 	return t.writeEvent(event)
 }
 
+// Process handles a pipeline event for the ChatToResponsesTransformer.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for OpenAI chunk and done events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *ChatToResponsesTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventOpenAIChunk:
+		var chunk types.Chunk
+		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+			return t.writeData(event.Data)
+		}
+		return t.handleChunk(&chunk)
+	case transform.EventDone:
+		return t.writeDone()
+	default:
+		return nil
+	}
+}
+
 // Receive processes a chunk JSON string and converts it to Responses format.
 // This implements the OpenAIChatReceiver interface for chaining.
+// Delegates to Process for the actual work.
 //
-// @brief Implements OpenAIChatReceiver.Receive by parsing JSON and calling handleChunk.
+// @brief Implements OpenAIChatReceiver.Receive by delegating to Process.
 //
 // @param chunkJSON The raw JSON of a types.Chunk (without SSE framing).
 //
 // @return error Returns nil on success.
 func (t *ChatToResponsesTransformer) Receive(chunkJSON string) error {
-	var chunk types.Chunk
-	if err := json.Unmarshal([]byte(chunkJSON), &chunk); err != nil {
-		return nil // Skip unparseable chunks
-	}
-	return t.handleChunk(&chunk)
+	return t.Process(transform.PipelineEvent{Type: transform.EventOpenAIChunk, Data: []byte(chunkJSON)})
 }
 
 // ReceiveDone signals the end of the stream.
 // This implements the OpenAIChatReceiver interface for chaining.
+// Delegates to Process for the actual work.
 //
-// @brief Implements OpenAIChatReceiver.ReceiveDone by writing the done marker.
+// @brief Implements OpenAIChatReceiver.ReceiveDone by delegating to Process.
 func (t *ChatToResponsesTransformer) ReceiveDone() error {
-	return t.writeDone()
+	return t.Process(transform.PipelineEvent{Type: transform.EventDone})
 }

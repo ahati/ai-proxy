@@ -69,6 +69,41 @@ func NewAnthropicToChatStreamingConverterWithReceiver(receiver transform.OpenAIC
 	}
 }
 
+// Process handles a pipeline event for the AnthropicToChatStreamingConverter.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for Anthropic event and done events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (c *AnthropicToChatStreamingConverter) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventAnthropicEvent:
+		return c.Receive(string(event.Data))
+	case transform.EventDone:
+		return c.ReceiveDone()
+	default:
+		return nil
+	}
+}
+
+// Initialize prepares the converter before processing events.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Initialize. No-op for this converter.
+func (c *AnthropicToChatStreamingConverter) Initialize() error {
+	return nil
+}
+
+// Close flushes and releases resources.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Close by flushing buffered data.
+func (c *AnthropicToChatStreamingConverter) Close() error {
+	return c.Flush()
+}
+
 // Receive processes an Anthropic event JSON string.
 //
 // @brief Implements AnthropicEventReceiver.Receive.

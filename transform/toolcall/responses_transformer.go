@@ -1448,3 +1448,27 @@ func (t *ResponsesTransformer) Initialize() error {
 func (t *ResponsesTransformer) GetResponseID() string {
 	return t.responseID
 }
+
+// Process handles a PipelineEvent by converting to an SSE event and delegating
+// to the existing Transform method. This implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for Responses API events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *ResponsesTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventAnthropicEvent:
+		return t.Transform(&sse.Event{Type: event.SSEType, Data: string(event.Data)})
+	case transform.EventSSE:
+		return t.Transform(&sse.Event{Type: event.SSEType, Data: string(event.Data)})
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return nil
+	}
+}
+
+// compile-time check that ResponsesTransformer implements Stage.
+var _ transform.Stage = (*ResponsesTransformer)(nil)

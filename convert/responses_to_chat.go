@@ -11,6 +11,7 @@ import (
 
 	"ai-proxy/conversation"
 	"ai-proxy/logging"
+	"ai-proxy/transform"
 	"ai-proxy/types"
 
 	"github.com/tmaxmax/go-sse"
@@ -1145,4 +1146,33 @@ func (t *ResponsesToChatTransformer) Initialize() error {
 // For ResponsesToChatTransformer, this is a no-op.
 func (t *ResponsesToChatTransformer) HandleCancel() error {
 	return nil
+}
+
+// Process handles a pipeline event for the ResponsesToChatTransformer.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for SSE and done events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *ResponsesToChatTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventSSE:
+		if len(event.Data) == 0 {
+			return nil
+		}
+		if string(event.Data) == "[DONE]" {
+			return t.writeDone()
+		}
+		var respEvent types.ResponsesStreamEvent
+		if err := json.Unmarshal(event.Data, &respEvent); err != nil {
+			return t.writeData(event.Data)
+		}
+		return t.handleEvent(&respEvent)
+	case transform.EventDone:
+		return t.writeDone()
+	default:
+		return nil
+	}
 }

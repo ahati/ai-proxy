@@ -326,6 +326,38 @@ func (t *Transformer) HandleCancel() error {
 	return t.base.HandleCancel()
 }
 
+// Process handles a PipelineEvent by delegating to the existing Transform method.
+// This makes Transformer implement the transform.Stage interface.
+//
+// @brief Implements Stage.Process by converting PipelineEvents to SSE events.
+//
+// @param event The pipeline event to process. Must not be zero-value.
+//
+// @return error Returns nil on success, or any error from the underlying Transform.
+//
+// @note EventDone delegates to Close rather than Transform, allowing proper cleanup.
+// All other event types are converted to sse.Event and passed to Transform.
+func (t *Transformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventAnthropicEvent:
+		return t.Transform(&sse.Event{
+			Type: event.SSEType,
+			Data: string(event.Data),
+		})
+	case transform.EventSSE:
+		return t.Transform(&sse.Event{
+			Type: event.SSEType,
+			Data: string(event.Data),
+		})
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return t.Transform(&sse.Event{
+			Data: string(event.Data),
+		})
+	}
+}
+
 // Close cleans up resources and closes the base transformer.
 func (t *Transformer) Close() error {
 	// Clean up any pending blocks

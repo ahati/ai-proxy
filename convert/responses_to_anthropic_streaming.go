@@ -354,5 +354,36 @@ func (t *ResponsesToAnthropicStreamingTransformer) HandleCancel() error {
 	return nil
 }
 
+// Process handles a pipeline event for the ResponsesToAnthropicStreamingTransformer.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for SSE and done events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *ResponsesToAnthropicStreamingTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventSSE:
+		if len(event.Data) == 0 {
+			return nil
+		}
+		if string(event.Data) == "[DONE]" {
+			return nil
+		}
+		var respEvent types.ResponsesStreamEvent
+		if err := json.Unmarshal(event.Data, &respEvent); err != nil {
+			logging.DebugMsg("Failed to parse Responses event: %v", err)
+			return nil
+		}
+		return t.handleEvent(&respEvent)
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return nil
+	}
+}
+
 // Verify interface compliance
 var _ transform.SSETransformer = (*ResponsesToAnthropicStreamingTransformer)(nil)
+var _ transform.Stage = (*ResponsesToAnthropicStreamingTransformer)(nil)

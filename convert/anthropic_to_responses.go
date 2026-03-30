@@ -6,6 +6,7 @@ import (
 	"io"
 	"time"
 
+	"ai-proxy/transform"
 	"ai-proxy/types"
 
 	"github.com/tmaxmax/go-sse"
@@ -671,5 +672,51 @@ func (t *AnthropicToResponsesTransformer) Initialize() error {
 // HandleCancel handles cancellation requests.
 // For AnthropicToResponsesTransformer, this is a no-op.
 func (t *AnthropicToResponsesTransformer) HandleCancel() error {
+	return nil
+}
+
+// Process handles a pipeline event for the AnthropicToResponsesTransformer.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for Anthropic event and done events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *AnthropicToResponsesTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventAnthropicEvent:
+		if len(event.Data) == 0 || string(event.Data) == "[DONE]" {
+			return nil
+		}
+		return t.handleAnthropicEventData(event.Data)
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return nil
+	}
+}
+
+// handleAnthropicEventData parses and dispatches an Anthropic event from raw JSON.
+func (t *AnthropicToResponsesTransformer) handleAnthropicEventData(data []byte) error {
+	var base struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &base); err != nil {
+		return nil
+	}
+
+	switch base.Type {
+	case "message_start":
+		return t.handleMessageStart(string(data))
+	case "content_block_start":
+		return t.handleContentBlockStart(string(data))
+	case "content_block_delta":
+		return t.handleContentBlockDelta(string(data))
+	case "content_block_stop":
+		return t.handleContentBlockStop(string(data))
+	case "message_delta":
+		return t.handleMessageDelta(string(data))
+	}
 	return nil
 }

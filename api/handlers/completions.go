@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"ai-proxy/api/pipeline"
 	"ai-proxy/config"
 	"ai-proxy/convert"
 	"ai-proxy/router"
@@ -217,35 +218,20 @@ func (h *CompletionsHandler) CreateTransformer(w io.Writer) transform.SSETransfo
 		return toolcall.NewOpenAITransformer(w)
 	}
 
-	// Passthrough: no transformation needed
-	if h.route.IsPassthrough && !h.route.KimiToolCallTransform && !h.route.GLM5ToolCallTransform {
-		return transform.NewPassthroughTransformer(w)
+	cfg := transform.Config{
+		UpstreamFormat:         h.route.OutputProtocol,
+		DownstreamFormat:       "openai",
+		KimiToolCallTransform:  h.route.KimiToolCallTransform,
+		GLM5ToolCallTransform:  h.route.GLM5ToolCallTransform,
+		ReasoningSplit:         h.route.ReasoningSplit,
 	}
 
-	switch h.route.OutputProtocol {
-	case "anthropic":
-		// Chain: Anthropic SSE → AnthropicTransformer (tool extraction) → AnthropicToChatStreamingConverter → OpenAI chunks
-		chatConverter := convert.NewAnthropicToChatStreamingConverter(w)
-		transformer := toolcall.NewAnthropicTransformerWithReceiver(chatConverter)
-		transformer.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
-		transformer.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
-		return transformer
-	case "openai":
-		// Use OpenAI transformer for tool call handling
-		if h.route.KimiToolCallTransform || h.route.GLM5ToolCallTransform {
-			t := toolcall.NewOpenAITransformer(w)
-			t.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
-			t.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
-			return t
-		}
-		return transform.NewPassthroughTransformer(w)
-	case "responses":
-		// Responses SSE → ResponsesToChatTransformer → OpenAI chunks
-		// No tool extraction needed - Responses format already has structured function_call items
-		return convert.NewResponsesToChatTransformer(w)
-	default:
+	t, err := pipeline.BuildPipeline(w, cfg)
+	if err != nil {
+		// Fallback to passthrough on error
 		return transform.NewPassthroughTransformer(w)
 	}
+	return t
 }
 
 // WriteError sends an error response in OpenAI format.
