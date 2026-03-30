@@ -232,9 +232,17 @@ func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransforme
 
 	switch h.route.OutputProtocol {
 	case "openai":
-		// Chain: OpenAI chunks → OpenAITransformer (tool call extraction) → ChatToAnthropicTransformer → Anthropic SSE
-		// This fixes the bug where AnthropicTransformer was incorrectly used for OpenAI input
-		chatToAnthropic := convert.NewChatToAnthropicTransformer(w)
+		// Chain: OpenAI chunks → OpenAITransformer (tool call extraction) → ChatToAnthropicTransformer → WriterToSSEAdapter → WebSearch → Passthrough → w
+		// Web search needs to intercept Anthropic-format events, so we chain it after the conversion.
+		// WriterToSSEAdapter parses the SSE text output from ChatToAnthropic back into *sse.Event objects.
+
+		// Build the web search chain: Passthrough(w) ← WebSearch ← WriterToSSEAdapter
+		passthrough := transform.NewPassthroughTransformer(w)
+		webSearchWrapper := h.wrapWithWebSearch(passthrough)
+		sseAdapter := transform.NewWriterToSSEAdapter(webSearchWrapper)
+
+		// ChatToAnthropicTransformer writes SSE text to the adapter
+		chatToAnthropic := convert.NewChatToAnthropicTransformer(sseAdapter)
 		transformer := toolcall.NewOpenAITransformerWithReceiver(chatToAnthropic)
 		transformer.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
 		transformer.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
@@ -257,8 +265,12 @@ func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransforme
 		return transform.NewPassthroughTransformer(w)
 	}
 
-	// Wrap with web search transformer if enabled
-	return h.wrapWithWebSearch(baseTransformer)
+	// Wrap with web search transformer if enabled (for anthropic/responses cases)
+	// For openai case, web search is already chained via WriterToSSEAdapter above
+	if h.route.OutputProtocol != "openai" {
+		return h.wrapWithWebSearch(baseTransformer)
+	}
+	return baseTransformer
 }
 
 // wrapWithWebSearch wraps the base transformer with web search interception if enabled.
