@@ -583,3 +583,27 @@ func (t *AnthropicTransformer) Initialize() error {
 func (t *AnthropicTransformer) HandleCancel() error {
 	return nil
 }
+
+// Process handles a PipelineEvent by converting to an SSE event and delegating
+// to the existing Transform method. This implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for Anthropic events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *AnthropicTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventAnthropicEvent:
+		return t.Transform(&sse.Event{Type: event.SSEType, Data: string(event.Data)})
+	case transform.EventSSE:
+		return t.Transform(&sse.Event{Type: event.SSEType, Data: string(event.Data)})
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return nil
+	}
+}
+
+// compile-time check that AnthropicTransformer implements Stage.
+var _ transform.Stage = (*AnthropicTransformer)(nil)

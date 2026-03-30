@@ -46,21 +46,7 @@ func (m *FinishReasonMapper) OpenAIToAnthropic(reason string) string {
 	return "end_turn"
 }
 
-// AnthropicToOpenAI converts an Anthropic stop reason to OpenAI finish reason.
-// Returns "stop" for unknown reasons.
-func (m *FinishReasonMapper) AnthropicToOpenAI(reason string) string {
-	if mapped, ok := anthropicToOpenAI[reason]; ok {
-		return mapped
-	}
-	return "stop"
-}
-
 // MapOpenAIToAnthropic is a convenience function using the global mapper.
 func MapOpenAIToAnthropic(reason string) string {
 	return FinishReason.OpenAIToAnthropic(reason)
-}
-
-// MapAnthropicToOpenAI is a convenience function using the global mapper.
-func MapAnthropicToOpenAI(reason string) string {
-	return FinishReason.AnthropicToOpenAI(reason)
 }

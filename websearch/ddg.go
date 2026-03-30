@@ -19,18 +19,18 @@ type DDGBackend struct {
 
 // ddgResponse represents the response from DuckDuckGo Instant Answer API.
 type ddgResponse struct {
-	AbstractText  string       `json:"AbstractText"`
-	AbstractURL   string       `json:"AbstractURL"`
+	AbstractText   string      `json:"AbstractText"`
+	AbstractURL    string      `json:"AbstractURL"`
 	AbstractSource string      `json:"AbstractSource"`
-	Heading       string       `json:"Heading"`
-	RelatedTopics []ddgTopic   `json:"RelatedTopics"`
-	Results       []ddgResult  `json:"Results"`
+	Heading        string      `json:"Heading"`
+	RelatedTopics  []ddgTopic  `json:"RelatedTopics"`
+	Results        []ddgResult `json:"Results"`
 }
 
 // ddgTopic represents a related topic from DuckDuckGo.
 type ddgTopic struct {
-	Text string    `json:"Text"`
-	URL  string    `json:"FirstURL"`
+	Text string `json:"Text"`
+	URL  string `json:"FirstURL"`
 }
 
 // ddgResult represents a result from DuckDuckGo.

@@ -97,63 +97,6 @@ func TestReadBody(t *testing.T) {
 	}
 }
 
-func TestValidateStreaming(t *testing.T) {
-	tests := []struct {
-		name        string
-		body        string
-		expectError bool
-		errorMsg    string
-	}{
-		{
-			name:        "streaming enabled",
-			body:        `{"stream": true}`,
-			expectError: false,
-		},
-		{
-			name:        "streaming disabled",
-			body:        `{"stream": false}`,
-			expectError: true,
-			errorMsg:    "non-streaming requests not supported",
-		},
-		{
-			name:        "streaming default false",
-			body:        `{"model": "test"}`,
-			expectError: true,
-			errorMsg:    "non-streaming requests not supported",
-		},
-		{
-			name:        "invalid json",
-			body:        `{invalid}`,
-			expectError: true,
-			errorMsg:    "invalid JSON",
-		},
-		{
-			name:        "empty object streaming false",
-			body:        `{}`,
-			expectError: true,
-			errorMsg:    "non-streaming requests not supported",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateStreaming([]byte(tt.body))
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("expected error, got nil")
-				} else if tt.errorMsg != "" && err.Error() != tt.errorMsg && err.Error()[:len(tt.errorMsg)] != tt.errorMsg {
-					t.Errorf("expected error containing %q, got %q", tt.errorMsg, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-			}
-		})
-	}
-}
-
 func TestSetStreamHeaders(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -823,63 +766,6 @@ func TestHandle_WriteErrorCalled(t *testing.T) {
 
 	if !writeErrorCalled {
 		t.Error("expected WriteError to be called")
-	}
-}
-
-func TestStreamResponse(t *testing.T) {
-	sseData := "data: {\"id\":\"test\"}\n\ndata: [DONE]\n\n"
-	reader := bytes.NewReader([]byte(sseData))
-
-	mockWriter := newMockResponseWriter()
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(mockWriter)
-	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
-
-	h := &mockHandler{}
-
-	streamResponse(c, reader, h)
-
-	headers := map[string]string{
-		"Content-Type":      "text/event-stream",
-		"Cache-Control":     "no-cache",
-		"Connection":        "keep-alive",
-		"X-Accel-Buffering": "no",
-	}
-
-	for key, expected := range headers {
-		actual := c.Writer.Header().Get(key)
-		if actual != expected {
-			t.Errorf("header %s: expected %q, got %q", key, expected, actual)
-		}
-	}
-
-	_ = w
-}
-
-func TestStreamWithoutCapture(t *testing.T) {
-	sseData := "data: {\"id\":\"test\"}\n\ndata: [DONE]\n\n"
-	reader := bytes.NewReader([]byte(sseData))
-
-	mockWriter := newMockResponseWriter()
-	c, _ := gin.CreateTestContext(mockWriter)
-	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
-
-	h := &mockHandler{}
-
-	streamWithoutCapture(c, reader, h)
-
-	headers := map[string]string{
-		"Content-Type":      "text/event-stream",
-		"Cache-Control":     "no-cache",
-		"Connection":        "keep-alive",
-		"X-Accel-Buffering": "no",
-	}
-
-	for key, expected := range headers {
-		actual := c.Writer.Header().Get(key)
-		if actual != expected {
-			t.Errorf("header %s: expected %q, got %q", key, expected, actual)
-		}
 	}
 }
 

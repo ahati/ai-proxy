@@ -18,50 +18,6 @@ func NewResponseFormatConverter() *ResponseFormatConverter {
 	return &ResponseFormatConverter{}
 }
 
-// ConvertOpenAIToAnthropic converts OpenAI response_format to Anthropic equivalent.
-// Anthropic doesn't have a direct response_format field, but structured outputs
-// can be achieved through tools with input_schema.
-//
-// For json_object: Returns a hint that tools should be used.
-// For json_schema: Returns a tool definition that matches the schema.
-func (c *ResponseFormatConverter) ConvertOpenAIToAnthropic(format *types.ResponseFormat) (map[string]interface{}, error) {
-	if format == nil {
-		return nil, nil
-	}
-
-	switch format.Type {
-	case "json_object":
-		// Anthropic doesn't have json_object mode directly
-		// Return a marker that indicates JSON mode should be requested
-		return map[string]interface{}{
-			"_json_mode": true,
-		}, nil
-
-	case "json_schema":
-		if format.JSONSchema == nil {
-			return nil, nil
-		}
-		// Convert JSON schema to an Anthropic tool
-		// This allows structured output via tool calling
-		return map[string]interface{}{
-			"_structured_output": true,
-			"_schema_name":       format.JSONSchema.Name,
-			"_schema":            format.JSONSchema.Schema,
-		}, nil
-
-	default:
-		return nil, nil
-	}
-}
-
-// ShouldUseJSONMode returns true if the response format requires JSON output.
-func (c *ResponseFormatConverter) ShouldUseJSONMode(format *types.ResponseFormat) bool {
-	if format == nil {
-		return false
-	}
-	return format.Type == "json_object" || format.Type == "json_schema"
-}
-
 // ToolChoiceConverter handles conversion between OpenAI and Anthropic tool_choice formats.
 type ToolChoiceConverter struct{}
 
@@ -257,17 +213,6 @@ func (c *StopConverter) ConvertOpenAIToAnthropic(stop interface{}) []string {
 	}
 }
 
-// ConvertAnthropicToOpenAI converts Anthropic stop_sequences to OpenAI stop.
-func (c *StopConverter) ConvertAnthropicToOpenAI(stopSequences []string) interface{} {
-	if len(stopSequences) == 0 {
-		return nil
-	}
-	if len(stopSequences) == 1 {
-		return stopSequences[0]
-	}
-	return stopSequences
-}
-
 // MaxTokensConverter handles max_tokens conversion and defaults.
 type MaxTokensConverter struct {
 	defaultTokens int
@@ -275,27 +220,6 @@ type MaxTokensConverter struct {
 
 // DefaultAnthropicMaxTokens is the shared default for Anthropic-bound requests.
 const DefaultAnthropicMaxTokens = 32768
-
-// NewMaxTokensConverter creates a new converter with the specified default.
-func NewMaxTokensConverter(defaultTokens int) *MaxTokensConverter {
-	return &MaxTokensConverter{defaultTokens: defaultTokens}
-}
-
-// ResolveAnthropicMaxTokens resolves Anthropic max_tokens, applying the shared default.
-func ResolveAnthropicMaxTokens(maxTokens int) int {
-	if maxTokens <= 0 {
-		return DefaultAnthropicMaxTokens
-	}
-	return maxTokens
-}
-
-// ResolveMaxTokens returns the max_tokens value, applying defaults if necessary.
-func (c *MaxTokensConverter) ResolveMaxTokens(maxTokens int) int {
-	if maxTokens <= 0 {
-		return c.defaultTokens
-	}
-	return maxTokens
-}
 
 // Global converters for convenience
 var (
@@ -314,19 +238,9 @@ func ConvertResponsesToolChoiceToOpenAI(toolChoice interface{}) interface{} {
 	return DefaultToolChoiceConverter.ConvertResponsesToOpenAI(toolChoice)
 }
 
-// ConvertToolChoiceAnthropicToOpenAI is a convenience function using the global converter.
-func ConvertToolChoiceAnthropicToOpenAI(toolChoice *types.ToolChoice) interface{} {
-	return DefaultToolChoiceConverter.ConvertAnthropicToOpenAI(toolChoice)
-}
-
 // ConvertStopOpenAIToAnthropic is a convenience function using the global converter.
 func ConvertStopOpenAIToAnthropic(stop interface{}) []string {
 	return DefaultStopConverter.ConvertOpenAIToAnthropic(stop)
-}
-
-// ConvertStopAnthropicToOpenAI is a convenience function using the global converter.
-func ConvertStopAnthropicToOpenAI(stopSequences []string) interface{} {
-	return DefaultStopConverter.ConvertAnthropicToOpenAI(stopSequences)
 }
 
 // UnmarshalToolChoice parses a raw JSON tool_choice field.

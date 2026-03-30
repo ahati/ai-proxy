@@ -19,7 +19,7 @@ func TestResponseDeleteHandler_Handle_Success(t *testing.T) {
 		MaxSize: 100,
 		TTL:     time.Hour,
 	})
-	defer conversation.DefaultStore.Clear()
+	defer conversation.InitDefaultStore(conversation.Config{MaxSize: 1000, TTL: 24 * time.Hour})
 
 	// Store a test conversation
 	testID := "test-response-id-123"
@@ -69,7 +69,7 @@ func TestResponseDeleteHandler_Handle_NotFound(t *testing.T) {
 		MaxSize: 100,
 		TTL:     time.Hour,
 	})
-	defer conversation.DefaultStore.Clear()
+	defer conversation.InitDefaultStore(conversation.Config{MaxSize: 1000, TTL: 24 * time.Hour})
 
 	// Create the handler and request with non-existent ID
 	nonExistentID := "non-existent-id"
@@ -110,7 +110,7 @@ func TestResponseDeleteHandler_Handle_EmptyID(t *testing.T) {
 		MaxSize: 100,
 		TTL:     time.Hour,
 	})
-	defer conversation.DefaultStore.Clear()
+	defer conversation.InitDefaultStore(conversation.Config{MaxSize: 1000, TTL: 24 * time.Hour})
 
 	// Create the handler and request with empty ID
 	w := httptest.NewRecorder()
@@ -169,7 +169,7 @@ func TestResponseDeleteHandler_Handle_DeletesOnlyTarget(t *testing.T) {
 		MaxSize: 100,
 		TTL:     time.Hour,
 	})
-	defer conversation.DefaultStore.Clear()
+	defer conversation.InitDefaultStore(conversation.Config{MaxSize: 1000, TTL: 24 * time.Hour})
 
 	// Store multiple test conversations
 	testID1 := "test-response-id-1"

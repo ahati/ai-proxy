@@ -13,36 +13,6 @@ import (
 	"ai-proxy/types"
 )
 
-// ResponsesToAnthropicConverter converts OpenAI ResponsesRequest to Anthropic MessageRequest.
-type ResponsesToAnthropicConverter struct{}
-
-// NewResponsesToAnthropicConverter creates a new converter for Responses to Anthropic format.
-func NewResponsesToAnthropicConverter() *ResponsesToAnthropicConverter {
-	return &ResponsesToAnthropicConverter{}
-}
-
-// Convert transforms a ResponsesRequest body to Anthropic MessageRequest format.
-func (c *ResponsesToAnthropicConverter) Convert(body []byte) ([]byte, error) {
-	return TransformResponsesToAnthropic(body)
-}
-
-// TransformResponsesToAnthropic converts an OpenAI ResponsesRequest to an Anthropic MessageRequest.
-// This handles the translation of all request fields including input, tools, and parameters.
-// When previous_response_id is provided, it walks the conversation chain from the store
-// and prepends all history to the current input.
-func TransformResponsesToAnthropic(body []byte) ([]byte, error) {
-	return TransformResponsesToAnthropicWithCache(body, nil)
-}
-
-// TransformResponsesToAnthropicWithCache converts an OpenAI ResponsesRequest to an Anthropic MessageRequest.
-// This handles the translation of all request fields including input, tools, and parameters.
-// When previous_response_id is provided and shouldStore is true, it walks the conversation chain from the store
-// and prepends all history to the current input.
-// If ctx contains a CaptureContext, sets CacheHit when conversation is found.
-func TransformResponsesToAnthropicWithCache(body []byte, ctx context.Context) ([]byte, error) {
-	return TransformResponsesToAnthropicWithOptions(body, ctx, true)
-}
-
 // TransformResponsesToAnthropicWithOptions converts an OpenAI ResponsesRequest to an Anthropic MessageRequest.
 // This handles the translation of all request fields including input, tools, and parameters.
 // When previous_response_id is provided and shouldStore is true, it walks the conversation chain from the store

@@ -62,32 +62,6 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 	return c
 }
 
-// WithTimeout returns a ClientOption that sets the HTTP client timeout.
-//
-// @param d - the timeout duration for HTTP requests
-// @return ClientOption - a functional option to set the timeout
-// @pre d must be greater than zero for meaningful timeout behavior
-// @post Client will timeout after the specified duration
-// @note A zero or negative duration results in no timeout
-func WithTimeout(d time.Duration) ClientOption {
-	return func(c *Client) {
-		c.httpClient.Timeout = d
-	}
-}
-
-// WithTransport returns a ClientOption that sets a custom HTTP transport.
-//
-// @param t - the custom HTTP transport to use
-// @return ClientOption - a functional option to set the transport
-// @pre t must not be nil
-// @post Client will use the provided transport for all requests
-// @note This overrides the default transport settings
-func WithTransport(t *http.Transport) ClientOption {
-	return func(c *Client) {
-		c.httpClient.Transport = t
-	}
-}
-
 // defaultTransport creates an HTTP transport with sensible defaults for upstream connections.
 // It configures connection pooling, timeouts, and TLS settings for optimal performance and security.
 //

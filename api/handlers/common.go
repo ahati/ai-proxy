@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -194,41 +193,6 @@ func readBody(c *gin.Context) ([]byte, error) {
 	return io.ReadAll(c.Request.Body)
 }
 
-// validateStreaming checks that the request has streaming enabled.
-// Returns an error if the request is not configured for streaming.
-//
-// @param body - Raw JSON request body to parse.
-// @return nil if streaming is enabled, error otherwise.
-//
-// @pre body is valid JSON (this is not validated here).
-// @post If error is returned, request should be rejected.
-// @note Non-streaming requests are not supported by this proxy.
-func validateStreaming(body []byte) error {
-	var req struct {
-		Stream bool `json:"stream"`
-	}
-	// Parse only the stream field to check streaming status
-	if err := json.Unmarshal(body, &req); err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
-	}
-	// Streaming must be enabled - non-streaming requests are rejected
-	// as the proxy is designed for SSE streaming responses
-	if !req.Stream {
-		return fmt.Errorf("non-streaming requests not supported")
-	}
-	return nil
-}
-
-// proxyRequest forwards the request to the upstream API and streams the response back.
-// This is the core proxying logic that handles upstream communication.
-//
-// @param c - Gin context for the current request.
-// @param h - Handler defining upstream URL, headers, and error handling.
-// @param body - Transformed request body to send upstream.
-//
-// @pre body is in correct upstream format.
-// @pre h.UpstreamURL() returns valid URL.
-// @post Response is streamed to client or error response is sent.
 func proxyRequest(c *gin.Context, h Handler, body []byte) {
 	// Resolve API key for upstream authentication
 	apiKey := h.ResolveAPIKey(c)
@@ -331,61 +295,6 @@ func proxyRequest(c *gin.Context, h Handler, body []byte) {
 		streamWithInitializedTransformer(c, resp.Body, transformer)
 	}
 }
-
-// streamResponse streams the upstream SSE response to the client with transformation.
-// This is the core streaming logic that processes each SSE event.
-//
-// @param c - Gin context for writing the response.
-// @param body - Reader for upstream SSE response body.
-// @param h - Handler providing the SSE transformer.
-//
-// @pre body is a valid SSE stream reader.
-// @pre Response headers have not been written yet.
-// @post All SSE events are processed and response is complete.
-func streamResponse(c *gin.Context, body io.Reader, h Handler) {
-	// Set headers required for SSE streaming
-	setStreamHeaders(c)
-
-	// Create transformer to convert upstream format to downstream format
-	transformer := h.CreateTransformer(c.Writer)
-	// Set context for cache status tracking
-	setContextOnTransformer(transformer, c.Request.Context())
-	// Ensure transformer resources are cleaned up
-	defer transformer.Close()
-
-	// Stream SSE events to client via Gin's streaming facility
-	c.Stream(func(w io.Writer) bool {
-		for ev, err := range sse.Read(body, nil) {
-			if err != nil {
-				// Context canceled means client disconnected - can't send response.failed
-				if errors.Is(err, context.Canceled) {
-					logging.DebugMsg("Stream completed, client disconnected")
-					return false
-				}
-				logging.ErrorMsg("SSE stream error: %v", err)
-				emitStreamError(transformer, err)
-				return false
-			}
-			// Transform each event to downstream format
-			if err := transformer.Transform(&ev); err != nil {
-				logging.ErrorMsg("Transform error: %v", err)
-				emitStreamError(transformer, err)
-				return false
-			}
-		}
-		return false
-	})
-}
-
-// setStreamHeaders sets the appropriate HTTP headers for SSE streaming responses.
-// These headers are required for proper SSE handling by clients and proxies.
-//
-// @param c - Gin context for setting response headers.
-//
-// @post Content-Type is set to text/event-stream.
-// @post Cache-Control is set to no-cache to prevent buffering.
-// @post Connection is set to keep-alive for persistent connection.
-// @post X-Accel-Buffering is set to no to disable nginx buffering.
 func setStreamHeaders(c *gin.Context) {
 	// Content-Type for Server-Sent Events
 	c.Header("Content-Type", "text/event-stream")
@@ -510,65 +419,6 @@ func streamWithInitializedTransformer(c *gin.Context, body io.Reader, transforme
 	})
 }
 
-// streamWithoutCapture streams the response without capturing data.
-// Used when capture is disabled to minimize latency.
-//
-// @param c - Gin context for writing the response.
-// @param body - Reader for upstream SSE response body.
-// @param h - Handler providing the SSE transformer.
-//
-// @pre body is a valid SSE stream reader.
-// @post Response is streamed to client without any capture overhead.
-func streamWithoutCapture(c *gin.Context, body io.Reader, h Handler) {
-	// Set headers for SSE streaming
-	setStreamHeaders(c)
-
-	// Create transformer without capture wrapper
-	transformer := h.CreateTransformer(c.Writer)
-	// Set context for cache status tracking
-	setContextOnTransformer(transformer, c.Request.Context())
-	defer transformer.Close()
-
-	// Stream events without capture overhead
-	// Get flusher from Gin response writer for immediate delivery
-	flusher, canFlush := c.Writer.(http.Flusher)
-
-	c.Stream(func(w io.Writer) bool {
-		for ev, err := range sse.Read(body, nil) {
-			if err != nil {
-				// Context canceled means client disconnected - can't send response.failed
-				if errors.Is(err, context.Canceled) {
-					logging.DebugMsg("Stream completed, client disconnected")
-					return false
-				}
-				logging.ErrorMsg("SSE stream error (no-capture): %v", err)
-				emitStreamError(transformer, err)
-				return false
-			}
-			// Transform and send event directly to client
-			if err := transformer.Transform(&ev); err != nil {
-				logging.ErrorMsg("Transform error (no-capture): %v", err)
-				emitStreamError(transformer, err)
-				return false
-			}
-
-			// Flush after each event to ensure immediate delivery
-			if canFlush {
-				flusher.Flush()
-			}
-		}
-		return false
-	})
-}
-
-// recordUpstreamEvent writes an SSE event to the capture writer.
-// Records the event type and data for later analysis.
-//
-// @param w - Capture writer to record the event to.
-// @param ev - SSE event to record.
-//
-// @pre w != nil
-// @post Event is recorded if it has non-empty data.
 func recordUpstreamEvent(w capture.CaptureWriter, ev sse.Event) {
 	// Only record events with data - skip empty keepalive events
 	if ev.Data != "" {

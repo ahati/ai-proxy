@@ -43,8 +43,8 @@ func TestResponseCancelHandler_Handle_Success(t *testing.T) {
 	}
 
 	// Verify stream is removed from registry
-	if registry.Get("resp_cancel_test") != nil {
-		t.Error("stream should be removed from registry after cancellation")
+	if registry.Cancel("resp_cancel_test") {
+		t.Error("stream should already be cancelled and removed from registry")
 	}
 }
 

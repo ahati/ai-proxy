@@ -42,6 +42,42 @@ func NewPassthroughTransformer(output io.Writer) *PassthroughTransformer {
 	return &PassthroughTransformer{output: output}
 }
 
+// Process handles a PipelineEvent by writing it as SSE to the output.
+// This implements the Stage interface.
+//
+// @brief Implements Stage.Process by converting PipelineEvent to SSE text.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success, error if write fails.
+func (t *PassthroughTransformer) Process(event PipelineEvent) error {
+	switch event.Type {
+	case EventDone:
+		return nil
+	case EventSSE, EventOpenAIChunk, EventAnthropicEvent:
+		return t.writeSSE(event)
+	default:
+		return nil
+	}
+}
+
+// writeSSE writes a PipelineEvent as SSE text to the output.
+func (t *PassthroughTransformer) writeSSE(event PipelineEvent) error {
+	if len(event.Data) == 0 && event.Type != EventSSE {
+		return nil
+	}
+
+	var err error
+	if event.SSEType != "" {
+		_, err = t.output.Write([]byte("event: " + event.SSEType + "\n"))
+		if err != nil {
+			return err
+		}
+	}
+	_, err = t.output.Write([]byte("data: " + string(event.Data) + "\n\n"))
+	return err
+}
+
 // Transform writes the SSE event data to the output unchanged.
 //
 // @brief Passes the event data through without modification.
@@ -66,17 +102,12 @@ func (t *PassthroughTransformer) Transform(event *sse.Event) error {
 		return nil
 	}
 
-	// Write the event in proper SSE format: "event: <type>\ndata: <content>\n\n"
-	// This maintains proper SSE protocol format with event type for client routing.
-	var err error
-	if event.Type != "" {
-		_, err = t.output.Write([]byte("event: " + event.Type + "\n"))
-		if err != nil {
-			return err
-		}
-	}
-	_, err = t.output.Write([]byte("data: " + event.Data + "\n\n"))
-	return err
+	// Delegate to Process via PipelineEvent
+	return t.Process(PipelineEvent{
+		Type:    EventSSE,
+		Data:    []byte(event.Data),
+		SSEType: event.Type,
+	})
 }
 
 // Flush is a no-op for passthrough transformer.

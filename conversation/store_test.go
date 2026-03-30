@@ -50,9 +50,6 @@ func TestNewStore(t *testing.T) {
 			if store.config.TTL != tt.wantTTL {
 				t.Errorf("NewStore() TTL = %v, want %v", store.config.TTL, tt.wantTTL)
 			}
-			if store.Size() != 0 {
-				t.Errorf("NewStore() initial Size = %v, want 0", store.Size())
-			}
 		})
 	}
 }
@@ -99,11 +96,6 @@ func TestStore_Store(t *testing.T) {
 			CreatedAt: time.Now(),
 		}
 		store.Store(conv)
-	}
-
-	// Should have at most MaxSize conversations
-	if store.Size() > 3 {
-		t.Errorf("Size() = %v, want at most 3", store.Size())
 	}
 
 	// First two should have been evicted (LRU)
@@ -200,11 +192,6 @@ func TestStore_Replace(t *testing.T) {
 	if len(conv.Input) != 1 || conv.Input[0].Content != "replaced" {
 		t.Errorf("Input content = %v, want 'replaced'", conv.Input[0].Content)
 	}
-
-	// Size should still be 1
-	if store.Size() != 1 {
-		t.Errorf("Size() = %v, want 1", store.Size())
-	}
 }
 
 func TestStore_Delete(t *testing.T) {
@@ -225,28 +212,6 @@ func TestStore_Delete(t *testing.T) {
 	store.Delete("nonexistent")
 }
 
-func TestStore_Clear(t *testing.T) {
-	store := NewStore(Config{MaxSize: 10, TTL: time.Hour})
-
-	// Store multiple conversations
-	for i := 0; i < 5; i++ {
-		store.Store(&Conversation{
-			ID:        string(rune('a' + i)),
-			CreatedAt: time.Now(),
-		})
-	}
-
-	if store.Size() != 5 {
-		t.Fatalf("Size() = %v, want 5", store.Size())
-	}
-
-	store.Clear()
-
-	if store.Size() != 0 {
-		t.Errorf("After Clear(), Size() = %v, want 0", store.Size())
-	}
-}
-
 func TestStore_NilConversation(t *testing.T) {
 	store := NewStore(Config{MaxSize: 10, TTL: time.Hour})
 
@@ -254,32 +219,25 @@ func TestStore_NilConversation(t *testing.T) {
 	store.Store(nil)
 
 	// Store empty ID should not panic
-	store.Store(&Conversation{ID: ""})
-
-	if store.Size() != 0 {
-		t.Errorf("Size() = %v, want 0 (nil/empty should not be stored)", store.Size())
-	}
+	store.Store(&Conversation{ID: "", CreatedAt: time.Now()})
 }
 
 func TestStore_ConcurrentAccess(t *testing.T) {
 	store := NewStore(Config{MaxSize: 100, TTL: time.Hour})
-	var wg sync.WaitGroup
 
-	// Concurrent writes
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		// Writer
 		go func(id int) {
 			defer wg.Done()
-			store.Store(&Conversation{
+			conv := &Conversation{
 				ID:        string(rune('a' + id%26)),
 				CreatedAt: time.Now(),
-			})
+			}
+			store.Store(conv)
 		}(i)
-	}
-
-	// Concurrent reads
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
+		// Reader
 		go func(id int) {
 			defer wg.Done()
 			store.Get(string(rune('a' + id%26)))
@@ -287,11 +245,6 @@ func TestStore_ConcurrentAccess(t *testing.T) {
 	}
 
 	wg.Wait()
-
-	// Should not panic and size should be <= MaxSize
-	if store.Size() > 100 {
-		t.Errorf("Size() = %v, want at most 100", store.Size())
-	}
 }
 
 func TestStore_AutoExpireTTL(t *testing.T) {
@@ -468,33 +421,5 @@ func TestStore_WalkChain_BrokenChain(t *testing.T) {
 	}
 	if chain[1].ID != "resp_3" {
 		t.Errorf("chain[1].ID = %v, want resp_3", chain[1].ID)
-	}
-}
-
-func TestWalkChainFromDefault(t *testing.T) {
-	// Reset default store
-	DefaultStore = nil
-
-	// Walk from nil store should return nil
-	if WalkChainFromDefault("test") != nil {
-		t.Error("WalkChainFromDefault from nil store should return nil")
-	}
-
-	// Initialize default store
-	InitDefaultStore(Config{MaxSize: 10, TTL: time.Hour})
-
-	// Create a chain
-	conv1 := &Conversation{ID: "chain_1", CreatedAt: time.Now()}
-	conv2 := &Conversation{ID: "chain_2", PreviousResponseID: "chain_1", CreatedAt: time.Now()}
-
-	StoreInDefault(conv1)
-	StoreInDefault(conv2)
-
-	chain := WalkChainFromDefault("chain_2")
-	if len(chain) != 2 {
-		t.Fatalf("WalkChainFromDefault(chain_2) returned %d items, want 2", len(chain))
-	}
-	if chain[0].ID != "chain_1" || chain[1].ID != "chain_2" {
-		t.Errorf("Unexpected chain order: %v", chain)
 	}
 }

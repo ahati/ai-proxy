@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"ai-proxy/transform"
 	"ai-proxy/types"
 
 	"github.com/tmaxmax/go-sse"
@@ -378,6 +379,8 @@ func isOpenAIToolChoiceNone(toolChoice interface{}) bool {
 // It implements the SSETransformer interface for streaming response conversion.
 type ChatToAnthropicTransformer struct {
 	w io.Writer
+	// outputStage is the downstream stage for direct event output (bypasses SSE round-trip)
+	outputStage transform.Stage
 
 	// State for tracking message info
 	messageID       string
@@ -418,6 +421,15 @@ func NewChatToAnthropicTransformer(w io.Writer) *ChatToAnthropicTransformer {
 	}
 }
 
+// SetOutputStage sets the downstream stage for direct event output.
+// When set, the transformer sends PipelineEvent directly instead of writing SSE text.
+// This eliminates the SSE→text→SSE round-trip when chaining transformers.
+//
+// @brief Sets the output stage for direct event output (bypasses io.Writer).
+func (t *ChatToAnthropicTransformer) SetOutputStage(stage transform.Stage) {
+	t.outputStage = stage
+}
+
 // Transform processes an OpenAI SSE event and converts it to Anthropic format.
 func (t *ChatToAnthropicTransformer) Transform(event *sse.Event) error {
 	if event.Data == "" {
@@ -432,7 +444,13 @@ func (t *ChatToAnthropicTransformer) Transform(event *sse.Event) error {
 	// Parse OpenAI chunk
 	var chunk types.Chunk
 	if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
-		// Pass through unparseable data as raw SSE
+		// Pass through unparseable data as raw SSE or event
+		if t.outputStage != nil {
+			return t.outputStage.Process(transform.PipelineEvent{
+				Type: transform.EventSSE,
+				Data: []byte(event.Data),
+			})
+		}
 		_, err := fmt.Fprintf(t.w, "data: %s\n\n", event.Data)
 		return err
 	}
@@ -502,6 +520,15 @@ func (t *ChatToAnthropicTransformer) handleChunk(chunk types.Chunk) error {
 	// Handle finish reason - store it for later emission with usage
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
 		t.finishReason = *choice.FinishReason
+		// Capture usage if present in same chunk (some providers send usage with finish_reason)
+		if chunk.Usage != nil {
+			t.promptTokens = chunk.Usage.PromptTokens
+			t.completionTokens = chunk.Usage.CompletionTokens
+			if chunk.Usage.PromptTokensDetails != nil {
+				t.cacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+				t.cacheCreateTokens = chunk.Usage.PromptTokensDetails.CacheCreationInputTokens
+			}
+		}
 		return nil
 	}
 
@@ -778,10 +805,22 @@ func (t *ChatToAnthropicTransformer) writeEvent(eventType string, data map[strin
 
 // writeSSE writes a complete SSE event with event type and data.
 // Format: event: <type>\ndata: <json>\n\n
+// When outputStage is set, sends PipelineEvent directly (bypasses SSE round-trip).
 func (t *ChatToAnthropicTransformer) writeSSE(eventType string, data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
+
+	// If outputStage is set, send PipelineEvent directly
+	if t.outputStage != nil {
+		return t.outputStage.Process(transform.PipelineEvent{
+			Type:    transform.EventAnthropicEvent,
+			Data:    data,
+			SSEType: eventType,
+		})
+	}
+
+	// Fallback: write SSE text
 	_, err := fmt.Fprintf(t.w, "event: %s\ndata: %s\n\n", eventType, string(data))
 	return err
 }
@@ -832,10 +871,18 @@ func (t *ChatToAnthropicTransformer) Close() error {
 				},
 			}
 			if t.promptTokens > 0 || t.completionTokens > 0 {
-				eventData["usage"] = map[string]interface{}{
-					"input_tokens":  t.promptTokens,
+				inputTokens := t.promptTokens - t.cacheReadTokens - t.cacheCreateTokens
+				usageData := map[string]interface{}{
+					"input_tokens":  inputTokens,
 					"output_tokens": t.completionTokens,
 				}
+				if t.cacheReadTokens > 0 {
+					usageData["cache_read_input_tokens"] = t.cacheReadTokens
+				}
+				if t.cacheCreateTokens > 0 {
+					usageData["cache_creation_input_tokens"] = t.cacheCreateTokens
+				}
+				eventData["usage"] = usageData
 			}
 			if err := t.writeEvent("message_delta", eventData); err != nil {
 				return err
@@ -860,28 +907,55 @@ func (t *ChatToAnthropicTransformer) HandleCancel() error {
 	return nil
 }
 
+// Process handles a pipeline event for the ChatToAnthropicTransformer.
+// It implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for OpenAI chunk and done events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *ChatToAnthropicTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventOpenAIChunk:
+		var chunk types.Chunk
+		if err := json.Unmarshal(event.Data, &chunk); err != nil {
+			// Pass through unparseable data as raw SSE or event
+			if t.outputStage != nil {
+				return t.outputStage.Process(transform.PipelineEvent{
+					Type: transform.EventSSE,
+					Data: event.Data,
+				})
+			}
+			_, err := fmt.Fprintf(t.w, "data: %s\n\n", string(event.Data))
+			return err
+		}
+		return t.handleChunk(chunk)
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return nil
+	}
+}
+
 // Receive processes a chunk JSON string and converts it to Anthropic format.
 // This implements the OpenAIChatReceiver interface for chaining.
+// Delegates to Process for the actual work.
 //
-// @brief Implements OpenAIChatReceiver.Receive by parsing JSON and calling handleChunk.
+// @brief Implements OpenAIChatReceiver.Receive by delegating to Process.
 //
 // @param chunkJSON The raw JSON of a types.Chunk (without SSE framing).
 //
 // @return error Returns nil on success.
 func (t *ChatToAnthropicTransformer) Receive(chunkJSON string) error {
-	var chunk types.Chunk
-	if err := json.Unmarshal([]byte(chunkJSON), &chunk); err != nil {
-		// Pass through unparseable data as raw SSE
-		_, err := fmt.Fprintf(t.w, "data: %s\n\n", chunkJSON)
-		return err
-	}
-	return t.handleChunk(chunk)
+	return t.Process(transform.PipelineEvent{Type: transform.EventOpenAIChunk, Data: []byte(chunkJSON)})
 }
 
 // ReceiveDone signals the end of the stream.
 // This implements the OpenAIChatReceiver interface for chaining.
+// Delegates to Process for the actual work.
 //
-// @brief Implements OpenAIChatReceiver.ReceiveDone by calling Close.
+// @brief Implements OpenAIChatReceiver.ReceiveDone by delegating to Process.
 func (t *ChatToAnthropicTransformer) ReceiveDone() error {
-	return t.Close()
+	return t.Process(transform.PipelineEvent{Type: transform.EventDone})
 }

@@ -37,52 +37,6 @@ func TestNewClient_Defaults(t *testing.T) {
 	}
 }
 
-func TestNewClient_WithTimeout(t *testing.T) {
-	client := NewClient("https://api.example.com", "test-key", WithTimeout(5*time.Second))
-
-	if client.httpClient.Timeout != 5*time.Second {
-		t.Errorf("expected timeout 5s, got %v", client.httpClient.Timeout)
-	}
-}
-
-func TestNewClient_WithTransport(t *testing.T) {
-	customTransport := &http.Transport{
-		MaxIdleConns: 50,
-	}
-	client := NewClient("https://api.example.com", "test-key", WithTransport(customTransport))
-
-	transport, ok := client.httpClient.Transport.(*http.Transport)
-	if !ok {
-		t.Error("expected Transport to be *http.Transport")
-	}
-	if transport.MaxIdleConns != 50 {
-		t.Errorf("expected MaxIdleConns 50, got %d", transport.MaxIdleConns)
-	}
-}
-
-func TestNewClient_MultipleOptions(t *testing.T) {
-	customTransport := &http.Transport{
-		MaxIdleConns: 25,
-	}
-	client := NewClient(
-		"https://api.example.com",
-		"test-key",
-		WithTimeout(10*time.Second),
-		WithTransport(customTransport),
-	)
-
-	if client.httpClient.Timeout != 10*time.Second {
-		t.Errorf("expected timeout 10s, got %v", client.httpClient.Timeout)
-	}
-	transport, ok := client.httpClient.Transport.(*http.Transport)
-	if !ok {
-		t.Error("expected Transport to be *http.Transport")
-	}
-	if transport.MaxIdleConns != 25 {
-		t.Errorf("expected MaxIdleConns 25, got %d", transport.MaxIdleConns)
-	}
-}
-
 func TestDefaultTransport(t *testing.T) {
 	transport := defaultTransport()
 
@@ -112,7 +66,7 @@ func TestDefaultTransport(t *testing.T) {
 func TestBuildRequest(t *testing.T) {
 	client := NewClient("https://api.example.com/v1/chat", "test-key")
 	ctx := context.Background()
-	body := []byte(`{"model":"gpt-4","message":"hello"}`)
+	body := []byte("{\"model\":\"gpt-4\",\"message\":\"hello\"}")
 
 	req, err := client.BuildRequest(ctx, body)
 	if err != nil {
@@ -132,7 +86,7 @@ func TestBuildRequest_WithCaptureContext(t *testing.T) {
 	httpReq := httptest.NewRequest("POST", "/test", nil)
 	cc := capture.NewCaptureContext(httpReq)
 	ctx := capture.WithCaptureContext(context.Background(), cc)
-	body := []byte(`{"model":"gpt-4"}`)
+	body := []byte("{\"model\":\"gpt-4\"}")
 
 	_, err := client.BuildRequest(ctx, body)
 	if err != nil {
@@ -142,7 +96,7 @@ func TestBuildRequest_WithCaptureContext(t *testing.T) {
 	if cc.Recorder.Data().UpstreamRequest == nil {
 		t.Error("expected UpstreamRequest to be set in capture context")
 	}
-	if string(cc.Recorder.Data().UpstreamRequest.Body) != `{"model":"gpt-4"}` {
+	if string(cc.Recorder.Data().UpstreamRequest.Body) != "{\"model\":\"gpt-4\"}" {
 		t.Errorf("expected body to be recorded, got %s", cc.Recorder.Data().UpstreamRequest.Body)
 	}
 }
@@ -193,7 +147,7 @@ func TestDo(t *testing.T) {
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"response":"ok"}`)),
+			Body:       io.NopCloser(strings.NewReader("{\"response\":\"ok\"}")),
 			Header:     make(http.Header),
 		}, nil
 	})
@@ -311,7 +265,7 @@ func TestGetAPIKey_BearerOnly(t *testing.T) {
 func TestBuildRequest_InvalidURL(t *testing.T) {
 	client := NewClient("://invalid-url", "test-key")
 	ctx := context.Background()
-	body := []byte(`{}`)
+	body := []byte("{}")
 
 	_, err := client.BuildRequest(ctx, body)
 	if err == nil {

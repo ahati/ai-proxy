@@ -37,6 +37,9 @@ func (m *mockBaseTransformer) Transform(event *sse.Event) error {
 // compile-time check that Transformer implements transform.SSETransformer
 var _ transform.SSETransformer = (*Transformer)(nil)
 
+// compile-time check that Transformer implements transform.Stage
+var _ transform.Stage = (*Transformer)(nil)
+
 func TestNewTransformer(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{}

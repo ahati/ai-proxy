@@ -881,18 +881,6 @@ func (t *ResponsesTransformer) handleContentBlockDelta(event types.Event) error 
 	return nil
 }
 
-// processGLM5ToolCalls handles thinking content that contains GLM-5 XML tool calls.
-// It extracts tool calls and emits appropriate Responses API events.
-func (t *ResponsesTransformer) processGLM5ToolCalls(text string) error {
-	events := t.glm5Parser.Parse(text)
-	for _, e := range events {
-		if err := t.writeParserEvent(e); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // processThinkingWithToolCalls handles thinking content that contains tool call markup.
 // It extracts tool calls and emits appropriate Responses API events.
 func (t *ResponsesTransformer) processThinkingWithToolCalls(text string) error {
@@ -1448,3 +1436,27 @@ func (t *ResponsesTransformer) Initialize() error {
 func (t *ResponsesTransformer) GetResponseID() string {
 	return t.responseID
 }
+
+// Process handles a PipelineEvent by converting to an SSE event and delegating
+// to the existing Transform method. This implements the transform.Stage interface.
+//
+// @brief Implements transform.Stage.Process for Responses API events.
+//
+// @param event The pipeline event to process.
+//
+// @return error Returns nil on success.
+func (t *ResponsesTransformer) Process(event transform.PipelineEvent) error {
+	switch event.Type {
+	case transform.EventAnthropicEvent:
+		return t.Transform(&sse.Event{Type: event.SSEType, Data: string(event.Data)})
+	case transform.EventSSE:
+		return t.Transform(&sse.Event{Type: event.SSEType, Data: string(event.Data)})
+	case transform.EventDone:
+		return t.Close()
+	default:
+		return nil
+	}
+}
+
+// compile-time check that ResponsesTransformer implements Stage.
+var _ transform.Stage = (*ResponsesTransformer)(nil)
