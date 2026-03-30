@@ -49,6 +49,8 @@ func BuildPipeline(w io.Writer, cfg transform.Config) (transform.SSETransformer,
 		return buildOpenAIInputStage(w, cfg)
 	case "anthropic":
 		return buildAnthropicInputStage(w, cfg)
+	case "responses":
+		return buildResponsesInputStage(w, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported upstream format: %q", cfg.UpstreamFormat)
 	}
@@ -77,6 +79,20 @@ func buildAnthropicInputStage(w io.Writer, cfg transform.Config) (transform.SSET
 		return buildAnthropicToAnthropic(w, cfg)
 	case "responses":
 		return buildAnthropicToResponses(w, cfg)
+	default:
+		return nil, fmt.Errorf("unsupported downstream format: %q", cfg.DownstreamFormat)
+	}
+}
+
+// buildResponsesInputStage creates a transformer for Responses upstream format.
+func buildResponsesInputStage(w io.Writer, cfg transform.Config) (transform.SSETransformer, error) {
+	switch cfg.DownstreamFormat {
+	case "openai":
+		return buildResponsesToOpenAI(w, cfg)
+	case "anthropic":
+		return buildResponsesToAnthropic(w, cfg)
+	case "responses":
+		return buildResponsesToResponses(w, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported downstream format: %q", cfg.DownstreamFormat)
 	}
@@ -225,4 +241,49 @@ func buildAnthropicToResponses(w io.Writer, cfg transform.Config) (transform.SSE
 	}
 
 	return t, nil
+}
+
+// buildResponsesToOpenAI builds a transformer for Responses→OpenAI conversion.
+//
+// @brief Responses SSE → conversion → OpenAI Chat chunks.
+//
+// Chain: ResponsesToChatStreamingConverter → output
+func buildResponsesToOpenAI(w io.Writer, cfg transform.Config) (transform.SSETransformer, error) {
+	// ResponsesToChatStreamingConverter writes OpenAI chunks directly to w
+	converter := convert.NewResponsesToChatStreamingConverter(w)
+
+	// Wrap Stage as SSETransformer
+	return transform.SSETransformerFromStage(converter), nil
+}
+
+// buildResponsesToAnthropic builds a transformer for Responses→Anthropic conversion.
+//
+// @brief Responses SSE → conversion → Anthropic SSE.
+//
+// Chain: ResponsesToAnthropicStreamingConverter → [web search] → output
+func buildResponsesToAnthropic(w io.Writer, cfg transform.Config) (transform.SSETransformer, error) {
+	// Final output stage
+	var outputStage transform.Stage = transform.NewSSEWriterStage(w)
+
+	// Wrap with web search if enabled
+	if cfg.NeedsWebSearch() {
+		adapter := websearch.GetDefaultAdapter()
+		if adapter != nil && adapter.IsEnabled() {
+			outputStage = wstransform.NewTransformer(transform.SSETransformerFromStage(outputStage), adapter)
+		}
+	}
+
+	// ResponsesToAnthropicStreamingConverter sends Anthropic events directly to outputStage
+	converter := convert.NewResponsesToAnthropicStreamingConverter(nil)
+	converter.SetOutputStage(outputStage)
+
+	// Wrap Stage as SSETransformer
+	return transform.SSETransformerFromStage(converter), nil
+}
+
+// buildResponsesToResponses builds a transformer for Responses→Responses with optional passthrough.
+//
+// @brief Responses SSE → passthrough → Responses SSE.
+func buildResponsesToResponses(w io.Writer, cfg transform.Config) (transform.SSETransformer, error) {
+	return transform.NewPassthroughTransformer(w), nil
 }

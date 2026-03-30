@@ -10,6 +10,7 @@ package transform
 //
 //   - EventOpenAIChunk: JSON-serialized types.Chunk (OpenAI Chat Completion chunk)
 //   - EventAnthropicEvent: JSON-serialized types.Event (Anthropic SSE event)
+//   - EventResponsesEvent: JSON-serialized types.ResponsesStreamEvent (Responses API SSE event)
 //   - EventSSE: Raw SSE event with optional type (passthrough)
 //   - EventDone: Stream termination signal
 type EventType int
@@ -22,6 +23,10 @@ const (
 	// EventAnthropicEvent carries a JSON-serialized Anthropic SSE event.
 	// Data field contains the raw JSON of a types.Event (no SSE framing).
 	EventAnthropicEvent
+
+	// EventResponsesEvent carries a JSON-serialized Responses API SSE event.
+	// Data field contains the raw JSON of a types.ResponsesStreamEvent (no SSE framing).
+	EventResponsesEvent
 
 	// EventSSE carries a raw SSE event for passthrough.
 	// SSEType field contains the event type (e.g., "message_start").
@@ -44,6 +49,8 @@ func (t EventType) String() string {
 		return "OpenAIChunk"
 	case EventAnthropicEvent:
 		return "AnthropicEvent"
+	case EventResponsesEvent:
+		return "ResponsesEvent"
 	case EventSSE:
 		return "SSE"
 	case EventDone:
@@ -74,6 +81,7 @@ type PipelineEvent struct {
 	// Interpretation depends on Type:
 	//   - EventOpenAIChunk: types.Chunk JSON
 	//   - EventAnthropicEvent: types.Event JSON
+	//   - EventResponsesEvent: types.ResponsesStreamEvent JSON
 	//   - EventSSE: raw SSE data payload
 	//   - EventDone: nil
 	Data []byte
