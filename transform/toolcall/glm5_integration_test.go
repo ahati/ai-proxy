@@ -511,3 +511,96 @@ func TestGLM5ToolCallsInAnthropicFormat(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAITransformer_ReasoningContentPreservedWithGLM5(t *testing.T) {
+	buf := &bytes.Buffer{}
+	tr := NewOpenAITransformer(buf)
+	tr.SetGLM5ToolCallTransform(true)
+
+	chunks := []types.Chunk{
+		{
+			ID:    "chatcmpl-test",
+			Model: "glm-5",
+			Choices: []types.Choice{{
+				Delta: types.Delta{ReasoningContent: "thinking"},
+			}},
+		},
+		{
+			ID:    "chatcmpl-test",
+			Model: "glm-5",
+			Choices: []types.Choice{{
+				Delta: types.Delta{Content: "answer"},
+			}},
+		},
+	}
+
+	for _, chunk := range chunks {
+		data, _ := json.Marshal(chunk)
+		event := &sse.Event{Data: string(data)}
+		if err := tr.Transform(event); err != nil {
+			t.Fatalf("Transform failed: %v", err)
+		}
+	}
+
+	if err := tr.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	if !strings.Contains(output, `"reasoning_content":"thinking"`) {
+		t.Errorf("expected reasoning_content:thinking")
+	}
+	if strings.Contains(output, `"content":"thinking"`) {
+		t.Errorf("reasoning should not be content")
+	}
+	if !strings.Contains(output, `"content":"answer"`) {
+		t.Errorf("expected content:answer")
+	}
+}
+
+func TestOpenAITransformer_ReasoningContentPreservedWithKimi(t *testing.T) {
+	buf := &bytes.Buffer{}
+	tr := NewOpenAITransformer(buf)
+	tr.SetKimiToolCallTransform(true)
+
+	chunks := []types.Chunk{
+		{
+			ID:    "chatcmpl-test",
+			Model: "kimi-k2.5",
+			Choices: []types.Choice{{
+				Delta: types.Delta{Reasoning: "deep thought"},
+			}},
+		},
+		{
+			ID:    "chatcmpl-test",
+			Model: "kimi-k2.5",
+			Choices: []types.Choice{{
+				Delta: types.Delta{Content: "response"},
+			}},
+		},
+	}
+
+	for _, chunk := range chunks {
+		data, _ := json.Marshal(chunk)
+		event := &sse.Event{Data: string(data)}
+		if err := tr.Transform(event); err != nil {
+			t.Fatalf("Transform failed: %v", err)
+		}
+	}
+
+	if err := tr.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	output := buf.String()
+	t.Logf("Output:\n%s", output)
+
+	if !strings.Contains(output, `"reasoning_content":"deep thought"`) {
+		t.Errorf("expected reasoning_content:deep thought")
+	}
+	if strings.Contains(output, `"content":"deep thought"`) {
+		t.Errorf("reasoning should not be content")
+	}
+}

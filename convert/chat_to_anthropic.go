@@ -859,3 +859,29 @@ func (t *ChatToAnthropicTransformer) Initialize() error {
 func (t *ChatToAnthropicTransformer) HandleCancel() error {
 	return nil
 }
+
+// Receive processes a chunk JSON string and converts it to Anthropic format.
+// This implements the OpenAIChatReceiver interface for chaining.
+//
+// @brief Implements OpenAIChatReceiver.Receive by parsing JSON and calling handleChunk.
+//
+// @param chunkJSON The raw JSON of a types.Chunk (without SSE framing).
+//
+// @return error Returns nil on success.
+func (t *ChatToAnthropicTransformer) Receive(chunkJSON string) error {
+	var chunk types.Chunk
+	if err := json.Unmarshal([]byte(chunkJSON), &chunk); err != nil {
+		// Pass through unparseable data as raw SSE
+		_, err := fmt.Fprintf(t.w, "data: %s\n\n", chunkJSON)
+		return err
+	}
+	return t.handleChunk(chunk)
+}
+
+// ReceiveDone signals the end of the stream.
+// This implements the OpenAIChatReceiver interface for chaining.
+//
+// @brief Implements OpenAIChatReceiver.ReceiveDone by calling Close.
+func (t *ChatToAnthropicTransformer) ReceiveDone() error {
+	return t.Close()
+}

@@ -257,17 +257,17 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 
 	switch h.route.OutputProtocol {
 	case "openai":
-		// ChatToResponsesTransformer converts Chat Completions to Responses format
-		// Tool call extraction from markup is enabled when tool_call_transform is true
-		t := convert.NewChatToResponsesTransformer(w)
-		t.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
-		t.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
-		t.SetInputItems(h.inputItems)
-		t.SetStore(h.shouldStore)
-		t.SetPreviousResponseID(h.previousResponseID)
-		t.SetReasoningSummaryMode(h.reasoningSummaryMode)
-		t.SetEncryptedReasoning(h.encryptedReasoning)
-		baseTransformer = t
+		// Chain: OpenAI chunks → OpenAITransformer (tool extraction) → ChatToResponsesTransformer → Responses SSE
+		chatToResponses := convert.NewChatToResponsesTransformer(w)
+		chatToResponses.SetInputItems(h.inputItems)
+		chatToResponses.SetStore(h.shouldStore)
+		chatToResponses.SetPreviousResponseID(h.previousResponseID)
+		chatToResponses.SetReasoningSummaryMode(h.reasoningSummaryMode)
+		chatToResponses.SetEncryptedReasoning(h.encryptedReasoning)
+		transformer := toolcall.NewOpenAITransformerWithReceiver(chatToResponses)
+		transformer.SetKimiToolCallTransform(h.route.KimiToolCallTransform)
+		transformer.SetGLM5ToolCallTransform(h.route.GLM5ToolCallTransform)
+		baseTransformer = transformer
 	case "anthropic":
 		// ResponsesTransformer converts Anthropic SSE to Responses format
 		// This conversion is always needed for /v1/responses endpoint

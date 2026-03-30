@@ -34,6 +34,10 @@ type AnthropicTransformer struct {
 	// Kimi tool call extraction
 	kmiParser             *KimiParser
 	kimiToolCallTransform bool
+
+	// receiver is an optional output destination for Anthropic event JSON
+	// When set, events are sent here instead of sseWriter
+	receiver transform.AnthropicEventReceiver
 }
 
 func NewAnthropicTransformer(output io.Writer) *AnthropicTransformer {
@@ -44,6 +48,25 @@ func NewAnthropicTransformer(output io.Writer) *AnthropicTransformer {
 		glm5ToolCallTransform: false,
 		kmiParser:             NewKimiParser(),
 		kimiToolCallTransform: false,
+	}
+}
+
+// NewAnthropicTransformerWithReceiver creates a transformer that sends events to a receiver.
+// This enables chaining: AnthropicTransformer → AnthropicEventReceiver → target format.
+//
+// @brief Creates a transformer that outputs to an AnthropicEventReceiver.
+//
+// @param receiver The receiver to send event JSON to.
+//
+// @return *AnthropicTransformer A new transformer instance.
+func NewAnthropicTransformerWithReceiver(receiver transform.AnthropicEventReceiver) *AnthropicTransformer {
+	return &AnthropicTransformer{
+		formatter:             NewAnthropicFormatter("", ""),
+		glm5Parser:            NewGLM5Parser(),
+		glm5ToolCallTransform: false,
+		kmiParser:             NewKimiParser(),
+		kimiToolCallTransform: false,
+		receiver:              receiver,
 	}
 }
 
@@ -63,7 +86,7 @@ func (t *AnthropicTransformer) Transform(event *sse.Event) error {
 	}
 
 	if event.Data == "[DONE]" {
-		return t.writeData([]byte("[DONE]"))
+		return t.writeDone()
 	}
 
 	var anthropicEvent types.Event
@@ -315,21 +338,21 @@ func (t *AnthropicTransformer) processThinking(text string, index int) [][]byte 
 }
 
 func (t *AnthropicTransformer) processText(text string, index int) [][]byte {
-	if t.glm5ToolCallTransform {
-		events := t.glm5Parser.Parse(text)
-		if len(events) > 0 {
-			return t.convertEventsToAnthropic(events, false, index)
-		}
-		return nil
-	}
+	// if t.glm5ToolCallTransform {
+	// 	events := t.glm5Parser.Parse(text)
+	// 	if len(events) > 0 {
+	// 		return t.convertEventsToAnthropic(events, false, index)
+	// 	}
+	// 	return nil
+	// }
 
-	if t.kimiToolCallTransform {
-		events := t.kmiParser.Parse(text)
-		if len(events) > 0 {
-			return t.convertEventsToAnthropic(events, false, index)
-		}
-		return nil
-	}
+	// if t.kimiToolCallTransform {
+	// 	events := t.kmiParser.Parse(text)
+	// 	if len(events) > 0 {
+	// 		return t.convertEventsToAnthropic(events, false, index)
+	// 	}
+	// 	return nil
+	// }
 
 	return [][]byte{t.makeTextDelta(index, text)}
 }
@@ -463,17 +486,47 @@ func (t *AnthropicTransformer) write(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
+	if t.receiver != nil {
+		// Extract event JSON from SSE format "event: type\ndata: {...}\n\n"
+		_, jsonData := transform.ExtractAnthropicEventFromSSE(data)
+		if jsonData != "" {
+			return t.receiver.Receive(jsonData)
+		}
+		return nil
+	}
 	_, err := t.sseWriter.WriteRaw(data)
 	return err
 }
 
 func (t *AnthropicTransformer) writeData(data []byte) error {
+	if t.receiver != nil {
+		return t.receiver.Receive(string(data))
+	}
 	return t.sseWriter.WriteData(data)
+}
+
+// writeDone signals stream end.
+//
+// @brief Writes the [DONE] marker or signals completion to receiver.
+//
+// @return error Returns nil on success.
+//
+// @note When receiver is set, calls ReceiveDone() instead of writing [DONE].
+// This is critical for converter chains to properly emit final output.
+func (t *AnthropicTransformer) writeDone() error {
+	if t.receiver != nil {
+		return t.receiver.ReceiveDone()
+	}
+	return t.sseWriter.WriteData([]byte("[DONE]"))
 }
 
 func (t *AnthropicTransformer) writePassthrough(eventType string, data []byte) error {
 	if len(data) == 0 {
 		return nil
+	}
+	if t.receiver != nil {
+		// For passthrough, send the JSON data as-is
+		return t.receiver.Receive(string(data))
 	}
 	return t.sseWriter.WriteEvent(eventType, data)
 }
@@ -512,6 +565,10 @@ func (t *AnthropicTransformer) Flush() error {
 		t.needTextStop = false
 	}
 
+	// Flush receiver if present
+	if t.receiver != nil {
+		return t.receiver.Flush()
+	}
 	return nil
 }
 

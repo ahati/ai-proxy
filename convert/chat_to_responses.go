@@ -12,7 +12,6 @@ import (
 	"ai-proxy/conversation"
 	"ai-proxy/logging"
 	"ai-proxy/summarizer"
-	"ai-proxy/transform/toolcall"
 	"ai-proxy/types"
 
 	"github.com/tmaxmax/go-sse"
@@ -298,23 +297,12 @@ type ChatToResponsesTransformer struct {
 
 	// reasoningSummaryMode controls how reasoning is summarized.
 	// Values: "" (no summary), "concise", "detailed"
-	// When set, the summarizer service is called to generate a summary.
+	// When set, the summarizer service is called to generate a summary of reasoning content.
 	reasoningSummaryMode string
 
 	// encryptedReasoning stores the encrypted reasoning blob from the request.
 	// Used in ZDR mode when store:false and encrypted_reasoning is provided.
 	encryptedReasoning string
-
-	// Tool call extraction from reasoning content (for Kimi-style markup)
-	toolCallTransform bool                 // enabled by config
-	parser            *toolcall.KimiParser // parser for tool call markup
-	extractedToolArgs strings.Builder
-	extractedToolID   string
-	extractedToolName string
-
-	// GLM-5 tool call extraction from reasoning_content
-	glm5Parser            *toolcall.GLM5Parser
-	glm5ToolCallTransform bool
 
 	// ctx is the request context for cache status tracking
 	ctx context.Context
@@ -335,8 +323,6 @@ func NewChatToResponsesTransformer(w io.Writer) *ChatToResponsesTransformer {
 		created:        time.Now().Unix(),
 		sequenceNumber: 0,
 		shouldStore:    true, // default to storing
-		parser:         toolcall.NewKimiParser(),
-		glm5Parser:     toolcall.NewGLM5Parser(),
 	}
 }
 
@@ -371,20 +357,6 @@ func (t *ChatToResponsesTransformer) SetReasoningSummaryMode(mode string) {
 // Used in ZDR mode when store:false and encrypted_reasoning is provided.
 func (t *ChatToResponsesTransformer) SetEncryptedReasoning(encryptedReasoning string) {
 	t.encryptedReasoning = encryptedReasoning
-}
-
-// SetKimiToolCallTransform enables or disables tool call extraction from reasoning content.
-// When enabled, the transformer will parse Kimi-style tool call markup in reasoning text
-// and emit proper function_call output items.
-func (t *ChatToResponsesTransformer) SetKimiToolCallTransform(enabled bool) {
-	t.toolCallTransform = enabled
-}
-
-// SetGLM5ToolCallTransform enables or disables GLM-5 XML tool call extraction.
-// When enabled, the transformer will parse <tool_call> tags in reasoning_content
-// and emit proper function_call output items.
-func (t *ChatToResponsesTransformer) SetGLM5ToolCallTransform(enabled bool) {
-	t.glm5ToolCallTransform = enabled
 }
 
 // SetContext sets the request context for cache status tracking.
@@ -578,21 +550,6 @@ func (t *ChatToResponsesTransformer) finalizeReasoning() error {
 		return nil
 	}
 
-	// Flush any remaining parser state (in case tool calls were being parsed)
-	if t.toolCallTransform {
-		for {
-			events := t.parser.Parse("")
-			if len(events) == 0 {
-				break
-			}
-			for _, e := range events {
-				if err := t.writeToolCallParserEvent(e); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
 	reasoningText := t.reasoningBuilder.String()
 
 	// If reasoning summary mode is set, call the summarizer service
@@ -662,11 +619,6 @@ func (t *ChatToResponsesTransformer) finalizeReasoning() error {
 }
 
 func (t *ChatToResponsesTransformer) emitReasoningDelta(text string) error {
-	// Check if tool call extraction is enabled and content contains tool call markup
-	if t.toolCallTransform && (!t.parser.IsIdle() || strings.Contains(text, "<|tool_call")) {
-		return t.processReasoningWithToolCalls(text)
-	}
-
 	// Mark that we've started emitting content
 	if !t.messageStarted {
 		t.messageStarted = true
@@ -721,115 +673,6 @@ func (t *ChatToResponsesTransformer) emitReasoningDelta(text string) error {
 		"output_index":    t.reasoningOutputIndex,
 		"summary_index":   t.summaryIndex,
 	}
-	return t.writeEvent(event)
-}
-
-// processReasoningWithToolCalls handles reasoning content that contains tool call markup.
-// It extracts tool calls and emits appropriate Responses API events.
-func (t *ChatToResponsesTransformer) processReasoningWithToolCalls(text string) error {
-	logging.InfoMsg("[%s] Tool call markup detected in reasoning content, extracting tool calls", t.responseID)
-
-	events := t.parser.Parse(text)
-	for _, e := range events {
-		if err := t.writeToolCallParserEvent(e); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeToolCallParserEvent converts a parser Event to Responses API format.
-func (t *ChatToResponsesTransformer) writeToolCallParserEvent(e toolcall.Event) error {
-	switch e.Type {
-	case toolcall.EventContent:
-		// Regular reasoning content - emit as reasoning summary delta
-		if e.Text != "" {
-			t.reasoningBuilder.WriteString(e.Text)
-			// Emit reasoning delta event
-			event := map[string]interface{}{
-				"type":            "response.reasoning_summary_text.delta",
-				"sequence_number": t.nextSeq(),
-				"item_id":         t.reasoningID,
-				"delta":           e.Text,
-				"output_index":    t.reasoningOutputIndex,
-				"summary_index":   t.summaryIndex,
-			}
-			return t.writeEvent(event)
-		}
-	case toolcall.EventToolStart:
-		// Start a new function_call output item
-		t.extractedToolArgs.Reset()
-		return t.emitExtractedToolCallStart(e.ID, e.Name)
-	case toolcall.EventToolArgs:
-		// Accumulate and emit function call arguments delta
-		t.extractedToolArgs.WriteString(e.Args)
-		event := map[string]interface{}{
-			"type":            "response.function_call_arguments.delta",
-			"sequence_number": t.nextSeq(),
-			"item_id":         t.extractedToolID,
-			"call_id":         t.extractedToolID,
-			"output_index":    t.toolCallIndex,
-			"delta":           e.Args,
-		}
-		return t.writeEvent(event)
-	case toolcall.EventToolEnd:
-		// End the function_call output item
-		args := t.extractedToolArgs.String()
-		return t.emitExtractedToolCallEnd(args)
-	case toolcall.EventSectionEnd:
-		// Tool calls section ended - continue with reasoning if there's more content
-	}
-	return nil
-}
-
-// emitExtractedToolCallStart emits events to start a function_call output item from extracted markup.
-func (t *ChatToResponsesTransformer) emitExtractedToolCallStart(id, name string) error {
-	// Finalize reasoning before emitting tool call
-	if t.inReasoning {
-		if err := t.finalizeReasoning(); err != nil {
-			return err
-		}
-	}
-
-	outputIndex := t.contentIndex
-	t.toolCallIndex = outputIndex
-	t.contentIndex = outputIndex + 1
-	t.extractedToolID = id
-	t.extractedToolName = name
-
-	event := map[string]interface{}{
-		"type":            "response.output_item.added",
-		"sequence_number": t.nextSeq(),
-		"output_index":    outputIndex,
-		"item": map[string]interface{}{
-			"type":      "function_call",
-			"id":        id,
-			"call_id":   id,
-			"name":      name,
-			"arguments": "",
-		},
-	}
-	return t.writeEvent(event)
-}
-
-// emitExtractedToolCallEnd emits events to end a function_call output item from extracted markup.
-func (t *ChatToResponsesTransformer) emitExtractedToolCallEnd(args string) error {
-	toolCallItem := map[string]interface{}{
-		"type":      "function_call",
-		"id":        t.extractedToolID,
-		"call_id":   t.extractedToolID,
-		"name":      t.extractedToolName,
-		"arguments": args,
-	}
-
-	event := map[string]interface{}{
-		"type":            "response.output_item.done",
-		"sequence_number": t.nextSeq(),
-		"output_index":    t.toolCallIndex,
-		"item":            toolCallItem,
-	}
-
-	t.toolCalls = append(t.toolCalls, toolCallItem)
 	return t.writeEvent(event)
 }
 
@@ -1318,4 +1161,28 @@ func (t *ChatToResponsesTransformer) EmitError(streamErr error) error {
 	}
 
 	return t.writeEvent(event)
+}
+
+// Receive processes a chunk JSON string and converts it to Responses format.
+// This implements the OpenAIChatReceiver interface for chaining.
+//
+// @brief Implements OpenAIChatReceiver.Receive by parsing JSON and calling handleChunk.
+//
+// @param chunkJSON The raw JSON of a types.Chunk (without SSE framing).
+//
+// @return error Returns nil on success.
+func (t *ChatToResponsesTransformer) Receive(chunkJSON string) error {
+	var chunk types.Chunk
+	if err := json.Unmarshal([]byte(chunkJSON), &chunk); err != nil {
+		return nil // Skip unparseable chunks
+	}
+	return t.handleChunk(&chunk)
+}
+
+// ReceiveDone signals the end of the stream.
+// This implements the OpenAIChatReceiver interface for chaining.
+//
+// @brief Implements OpenAIChatReceiver.ReceiveDone by writing the done marker.
+func (t *ChatToResponsesTransformer) ReceiveDone() error {
+	return t.writeDone()
 }
