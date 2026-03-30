@@ -502,6 +502,15 @@ func (t *ChatToAnthropicTransformer) handleChunk(chunk types.Chunk) error {
 	// Handle finish reason - store it for later emission with usage
 	if choice.FinishReason != nil && *choice.FinishReason != "" {
 		t.finishReason = *choice.FinishReason
+		// Capture usage if present in same chunk (some providers send usage with finish_reason)
+		if chunk.Usage != nil {
+			t.promptTokens = chunk.Usage.PromptTokens
+			t.completionTokens = chunk.Usage.CompletionTokens
+			if chunk.Usage.PromptTokensDetails != nil {
+				t.cacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+				t.cacheCreateTokens = chunk.Usage.PromptTokensDetails.CacheCreationInputTokens
+			}
+		}
 		return nil
 	}
 
@@ -832,10 +841,18 @@ func (t *ChatToAnthropicTransformer) Close() error {
 				},
 			}
 			if t.promptTokens > 0 || t.completionTokens > 0 {
-				eventData["usage"] = map[string]interface{}{
-					"input_tokens":  t.promptTokens,
+				inputTokens := t.promptTokens - t.cacheReadTokens - t.cacheCreateTokens
+				usageData := map[string]interface{}{
+					"input_tokens":  inputTokens,
 					"output_tokens": t.completionTokens,
 				}
+				if t.cacheReadTokens > 0 {
+					usageData["cache_read_input_tokens"] = t.cacheReadTokens
+				}
+				if t.cacheCreateTokens > 0 {
+					usageData["cache_creation_input_tokens"] = t.cacheCreateTokens
+				}
+				eventData["usage"] = usageData
 			}
 			if err := t.writeEvent("message_delta", eventData); err != nil {
 				return err
