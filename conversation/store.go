@@ -175,78 +175,6 @@ func (s *Store) WalkChainWithOwnership(id string, userID string) ([]*Conversatio
 	return chain, nil
 }
 
-// WalkChainOptions provides options for walking the conversation chain.
-type WalkChainOptions struct {
-	// MaxTokens is the maximum number of tokens to include in the chain.
-	// If 0, no limit is applied.
-	MaxTokens int
-}
-
-// WalkChainWithOptions walks the conversation chain with optional limits.
-// If MaxTokens is set, the chain is truncated to stay within the token budget,
-// dropping the oldest turns first.
-func (s *Store) WalkChainWithOptions(id string, opts WalkChainOptions) []*Conversation {
-	chain := s.WalkChain(id)
-	if opts.MaxTokens <= 0 || len(chain) == 0 {
-		return chain
-	}
-
-	// Count tokens and truncate from the beginning (oldest turns)
-	// Simple estimation: ~4 characters per token
-	totalTokens := 0
-	result := make([]*Conversation, 0, len(chain))
-
-	// Walk from newest to oldest, accumulate until we hit limit
-	for i := len(chain) - 1; i >= 0; i-- {
-		conv := chain[i]
-		convTokens := estimateConversationTokens(conv)
-		if totalTokens+convTokens > opts.MaxTokens {
-			break
-		}
-		totalTokens += convTokens
-		result = append(result, conv)
-	}
-
-	// Reverse to get chronological order
-	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
-		result[i], result[j] = result[j], result[i]
-	}
-
-	return result
-}
-
-// estimateConversationTokens estimates the token count for a conversation.
-// Uses a simple heuristic of ~4 characters per token.
-func estimateConversationTokens(conv *Conversation) int {
-	chars := 0
-
-	// Count input content
-	for _, item := range conv.Input {
-		switch content := item.Content.(type) {
-		case string:
-			chars += len(content)
-		case []interface{}:
-			for _, part := range content {
-				if m, ok := part.(map[string]interface{}); ok {
-					if text, ok := m["text"].(string); ok {
-						chars += len(text)
-					}
-				}
-			}
-		}
-	}
-
-	// Count output content
-	for _, item := range conv.Output {
-		for _, content := range item.Content {
-			chars += len(content.Text)
-		}
-	}
-
-	// Simple estimation: ~4 characters per token
-	return chars / 4
-}
-
 // Store saves a conversation, evicting the oldest if at capacity.
 // If a conversation with the same ID already exists, it is replaced.
 func (s *Store) Store(conv *Conversation) {
@@ -291,22 +219,6 @@ func (s *Store) Delete(id string) {
 	if elem, ok := s.data[id]; ok {
 		s.deleteElement(elem)
 	}
-}
-
-// Size returns the current number of stored conversations.
-func (s *Store) Size() int {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.lru.Len()
-}
-
-// Clear removes all conversations from the store.
-func (s *Store) Clear() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.data = make(map[string]*list.Element)
-	s.lru.Init()
 }
 
 // deleteElement removes an element from both the map and the list.
@@ -362,15 +274,6 @@ func GetFromDefault(id string) *Conversation {
 	return DefaultStore.Get(id)
 }
 
-// WalkChainFromDefault walks the conversation chain from the default store.
-// Returns nil if the default store is not initialized.
-func WalkChainFromDefault(id string) []*Conversation {
-	if DefaultStore == nil {
-		return nil
-	}
-	return DefaultStore.WalkChain(id)
-}
-
 // WalkChainFromDefaultWithOwnership walks the conversation chain with ownership validation.
 // Returns OwnershipError if the conversation belongs to a different user.
 func WalkChainFromDefaultWithOwnership(id string, userID string) ([]*Conversation, error) {
@@ -387,12 +290,4 @@ func StoreInDefault(conv *Conversation) {
 		return
 	}
 	DefaultStore.Store(conv)
-}
-
-// WalkChainFromDefaultWithOptions walks the conversation chain with options.
-func WalkChainFromDefaultWithOptions(id string, opts WalkChainOptions) []*Conversation {
-	if DefaultStore == nil {
-		return nil
-	}
-	return DefaultStore.WalkChainWithOptions(id, opts)
 }

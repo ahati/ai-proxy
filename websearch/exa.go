@@ -19,10 +19,10 @@ type ExaBackend struct {
 
 // exaRequest represents the request body for Exa API.
 type exaRequest struct {
-	Query     string            `json:"query"`
-	Type      string            `json:"type"`
+	Query      string            `json:"query"`
+	Type       string            `json:"type"`
 	NumResults int               `json:"numResults"`
-	Contents  exaContentsConfig `json:"contents"`
+	Contents   exaContentsConfig `json:"contents"`
 }
 
 // exaContentsConfig specifies what content to retrieve.

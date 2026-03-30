@@ -3,32 +3,13 @@ package convert
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"time"
 
-	"ai-proxy/transform"
 	"ai-proxy/types"
-
-	"github.com/tmaxmax/go-sse"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Anthropic → Responses — Converter
 // ─────────────────────────────────────────────────────────────────────────────
-
-// AnthropicToResponsesConverter converts Anthropic MessageRequest to ResponsesRequest.
-// It implements the RequestConverter interface for the Anthropic to Responses conversion.
-type AnthropicToResponsesConverter struct{}
-
-// NewAnthropicToResponsesConverter creates a new converter for Anthropic to Responses format.
-func NewAnthropicToResponsesConverter() *AnthropicToResponsesConverter {
-	return &AnthropicToResponsesConverter{}
-}
-
-// Convert transforms an Anthropic MessageRequest body to ResponsesRequest format.
-func (c *AnthropicToResponsesConverter) Convert(body []byte) ([]byte, error) {
-	return TransformAnthropicToResponses(body)
-}
 
 // TransformAnthropicToResponses converts an Anthropic MessageRequest body to ResponsesRequest format.
 // This is the primary entry point for converting Anthropic requests to Responses API format.
@@ -191,22 +172,47 @@ func anthropicContentBlocksToResponsesItems(role string, blocks []interface{}) (
 	case "assistant":
 		return anthropicAssistantBlocksToResponsesItems(blocks)
 	default:
-		return nil, fmt.Errorf("unknown role: %q", role)
+		return nil, fmt.Errorf("unknown role: %s", role)
 	}
 }
 
 func anthropicUserBlocksToResponsesItems(blocks []interface{}) ([]types.InputItem, error) {
-	var contentParts []types.ContentPart
+	var items []types.InputItem
+
+	// Group all user blocks into a single message item
+	var content []types.ContentPart
 	var functionOutputItems []types.InputItem
 
-	for _, item := range blocks {
-		b, ok := item.(map[string]interface{})
+	for _, block := range blocks {
+		b, ok := block.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		blockType, _ := b["type"].(string)
+
 		switch blockType {
+		case "text":
+			text, _ := b["text"].(string)
+			content = append(content, types.ContentPart{
+				Type: "input_text",
+				Text: text,
+			})
+		case "image":
+			// Convert Anthropic image block to Responses format
+			source, ok := b["source"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+			imageURL, err := anthropicImageSourceToURL(source)
+			if err != nil {
+				return nil, err
+			}
+			content = append(content, types.ContentPart{
+				Type:     "input_image",
+				ImageURL: imageURL,
+			})
 		case "tool_result":
+			// Convert tool_result to a function_call_output item
 			toolUseID, _ := b["tool_use_id"].(string)
 			content := extractToolResultContent(b["content"])
 			functionOutputItems = append(functionOutputItems, types.InputItem{
@@ -214,89 +220,66 @@ func anthropicUserBlocksToResponsesItems(blocks []interface{}) ([]types.InputIte
 				CallID: toolUseID,
 				Output: content,
 			})
-		case "text":
-			text, _ := b["text"].(string)
-			contentParts = append(contentParts, types.ContentPart{
-				Type: "input_text",
-				Text: text,
-			})
-		case "image":
-			src, ok := b["source"].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			imageURL, err := anthropicImageSourceToURL(src)
-			if err != nil {
-				return nil, err
-			}
-			contentParts = append(contentParts, types.ContentPart{
-				Type:     "input_image",
-				ImageURL: imageURL,
-			})
 		}
 	}
 
-	var out []types.InputItem
-	if len(contentParts) > 0 {
-		out = append(out, types.InputItem{
+	// Build items: message first (if has content), then function outputs
+	if len(content) > 0 {
+		items = append(items, types.InputItem{
 			Type:    "message",
 			Role:    "user",
-			Content: contentParts,
+			Content: content,
 		})
 	}
-	out = append(out, functionOutputItems...)
-	return out, nil
+	items = append(items, functionOutputItems...)
+
+	return items, nil
 }
 
 func anthropicAssistantBlocksToResponsesItems(blocks []interface{}) ([]types.InputItem, error) {
-	var contentParts []types.ContentPart
-	var functionCallItems []types.InputItem
+	var items []types.InputItem
+	var messageContent []types.ContentPart
 
-	for _, item := range blocks {
-		b, ok := item.(map[string]interface{})
+	for _, block := range blocks {
+		b, ok := block.(map[string]interface{})
 		if !ok {
 			continue
 		}
 		blockType, _ := b["type"].(string)
+
 		switch blockType {
 		case "text":
 			text, _ := b["text"].(string)
-			contentParts = append(contentParts, types.ContentPart{
+			messageContent = append(messageContent, types.ContentPart{
 				Type: "output_text",
 				Text: text,
 			})
+		case "thinking":
+			// Drop thinking blocks - no equivalent in Responses API input
 		case "tool_use":
 			id, _ := b["id"].(string)
 			name, _ := b["name"].(string)
-			input := b["input"]
-			var args string
-			switch v := input.(type) {
-			case string:
-				args = v
-			default:
-				b, _ := json.Marshal(v)
-				args = string(b)
-			}
-			functionCallItems = append(functionCallItems, types.InputItem{
+			inputBytes, _ := json.Marshal(b["input"])
+
+			items = append(items, types.InputItem{
 				Type:      "function_call",
 				CallID:    id,
 				Name:      name,
-				Arguments: args,
+				Arguments: string(inputBytes),
 			})
-			// thinking — dropped (no Responses API equivalent in input)
 		}
 	}
 
-	var out []types.InputItem
-	if len(contentParts) > 0 {
-		out = append(out, types.InputItem{
+	// Add message item first if there's text content
+	if len(messageContent) > 0 {
+		items = append([]types.InputItem{{
 			Type:    "message",
 			Role:    "assistant",
-			Content: contentParts,
-		})
+			Content: messageContent,
+		}}, items...)
 	}
-	out = append(out, functionCallItems...)
-	return out, nil
+
+	return items, nil
 }
 
 func anthropicImageSourceToURL(src map[string]interface{}) (string, error) {
@@ -312,411 +295,4 @@ func anthropicImageSourceToURL(src map[string]interface{}) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown image source type: %q", srcType)
 	}
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Anthropic → Responses — Response
-// ─────────────────────────────────────────────────────────────────────────────
-
-// AnthropicMessageInfoToResponses converts an Anthropic MessageInfo into a Responses Response.
-func AnthropicMessageInfoToResponses(msg *types.MessageInfo) (*types.ResponsesResponse, error) {
-	out := &types.ResponsesResponse{
-		ID:        msg.ID,
-		Object:    "response",
-		CreatedAt: time.Now().Unix(),
-		Model:     msg.Model,
-		Status:    "completed",
-	}
-	if msg.Usage != nil {
-		out.Usage = &types.ResponsesUsage{
-			InputTokens:  msg.Usage.InputTokens,
-			OutputTokens: msg.Usage.OutputTokens,
-			TotalTokens:  msg.Usage.InputTokens + msg.Usage.OutputTokens,
-		}
-	}
-
-	var msgItem types.OutputItem
-	msgItem.Type = "message"
-	msgItem.Role = "assistant"
-
-	for _, b := range msg.Content {
-		switch b.Type {
-		case "text":
-			msgItem.Content = append(msgItem.Content, types.OutputContent{
-				Type: "output_text",
-				Text: b.Text,
-			})
-		case "tool_use":
-			out.Output = append(out.Output, types.OutputItem{
-				Type:      "function_call",
-				CallID:    b.ID,
-				Name:      b.Name,
-				Arguments: string(b.Input),
-			})
-		}
-	}
-	if len(msgItem.Content) > 0 {
-		// Prepend message item before any function_call items.
-		out.Output = append([]types.OutputItem{msgItem}, out.Output...)
-	}
-	return out, nil
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Anthropic → Responses — Streaming
-// ─────────────────────────────────────────────────────────────────────────────
-
-// AnthropicToResponsesTransformer transforms Anthropic SSE events to Responses SSE.
-type AnthropicToResponsesTransformer struct {
-	w io.Writer
-
-	responseID string
-	model      string
-	created    int64
-
-	outputIndex   int
-	blockTypeMap  map[int]string // block index -> type
-	toolCallItems map[int]*types.OutputItem
-	toolCallArgs  map[int]string // block index -> accumulated arguments
-
-	sequenceNumber int
-	completed      bool
-
-	// Token usage tracking from message_start
-	inputTokens          int
-	cacheReadInputTokens int
-}
-
-// NewAnthropicToResponsesTransformer creates a new transformer.
-func NewAnthropicToResponsesTransformer(w io.Writer) *AnthropicToResponsesTransformer {
-	return &AnthropicToResponsesTransformer{
-		w:             w,
-		created:       time.Now().Unix(),
-		blockTypeMap:  make(map[int]string),
-		toolCallItems: make(map[int]*types.OutputItem),
-		toolCallArgs:  make(map[int]string),
-	}
-}
-
-func (t *AnthropicToResponsesTransformer) nextSeq() int {
-	t.sequenceNumber++
-	return t.sequenceNumber
-}
-
-// Transform transforms an SSE event.
-func (t *AnthropicToResponsesTransformer) Transform(event *sse.Event) error {
-	if event.Data == "" || event.Data == "[DONE]" {
-		return nil
-	}
-
-	var base struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal([]byte(event.Data), &base); err != nil {
-		return nil
-	}
-
-	switch base.Type {
-	case "message_start":
-		return t.handleMessageStart(event.Data)
-	case "content_block_start":
-		return t.handleContentBlockStart(event.Data)
-	case "content_block_delta":
-		return t.handleContentBlockDelta(event.Data)
-	case "content_block_stop":
-		return t.handleContentBlockStop(event.Data)
-	case "message_delta":
-		return t.handleMessageDelta(event.Data)
-	}
-	return nil
-}
-
-func (t *AnthropicToResponsesTransformer) handleMessageStart(data string) error {
-	var e types.AnthropicMessageStartEvent
-	if err := json.Unmarshal([]byte(data), &e); err != nil {
-		return err
-	}
-	t.responseID = e.Message.ID
-	t.model = e.Message.Model
-
-	// Capture input token usage from message_start
-	t.inputTokens = e.Message.Usage.InputTokens
-	t.cacheReadInputTokens = e.Message.Usage.CacheReadInputTokens
-
-	// Emit response.created
-	resp := &types.ResponsesResponse{
-		ID:     t.responseID,
-		Object: "response",
-		Model:  t.model,
-		Status: "in_progress",
-	}
-	if err := t.emitEvent(string(types.EventResponseCreated), map[string]interface{}{
-		"type":            string(types.EventResponseCreated),
-		"sequence_number": t.nextSeq(),
-		"response":        resp,
-	}); err != nil {
-		return err
-	}
-
-	// Emit response.in_progress
-	return t.emitEvent(string(types.EventResponseInProgress), map[string]interface{}{
-		"type":            string(types.EventResponseInProgress),
-		"sequence_number": t.nextSeq(),
-		"response":        resp,
-	})
-}
-
-func (t *AnthropicToResponsesTransformer) handleContentBlockStart(data string) error {
-	var e types.AnthropicContentBlockStartEvent
-	if err := json.Unmarshal([]byte(data), &e); err != nil {
-		return err
-	}
-	t.blockTypeMap[e.Index] = e.ContentBlock.Type
-
-	switch e.ContentBlock.Type {
-	case "text":
-		// Emit response.output_item.added for message
-		msgItem := &types.OutputItem{
-			Type: "message",
-			ID:   fmt.Sprintf("item_%d", e.Index),
-			Role: "assistant",
-		}
-		if err := t.emitEvent(string(types.EventResponseOutputItemAdded), map[string]interface{}{
-			"type":            string(types.EventResponseOutputItemAdded),
-			"sequence_number": t.nextSeq(),
-			"output_index":    t.outputIndex,
-			"item":            msgItem,
-		}); err != nil {
-			return err
-		}
-
-		// Emit response.content_part.added
-		part := &types.ContentPart{Type: "output_text"}
-		if err := t.emitEvent(string(types.EventResponseContentPartAdded), map[string]interface{}{
-			"type":            string(types.EventResponseContentPartAdded),
-			"sequence_number": t.nextSeq(),
-			"output_index":    t.outputIndex,
-			"content_index":   0,
-			"part":            part,
-		}); err != nil {
-			return err
-		}
-		t.outputIndex++
-
-	case "tool_use":
-		item := &types.OutputItem{
-			Type:   "function_call",
-			ID:     e.ContentBlock.ID,
-			CallID: e.ContentBlock.ID,
-			Name:   e.ContentBlock.Name,
-		}
-		t.toolCallItems[e.Index] = item
-		t.toolCallArgs[e.Index] = ""
-		if err := t.emitEvent(string(types.EventResponseOutputItemAdded), map[string]interface{}{
-			"type":            string(types.EventResponseOutputItemAdded),
-			"sequence_number": t.nextSeq(),
-			"output_index":    t.outputIndex,
-			"item":            item,
-		}); err != nil {
-			return err
-		}
-		t.outputIndex++
-	}
-	return nil
-}
-
-func (t *AnthropicToResponsesTransformer) handleContentBlockDelta(data string) error {
-	var e types.AnthropicContentBlockDeltaEvent
-	if err := json.Unmarshal([]byte(data), &e); err != nil {
-		return err
-	}
-
-	switch e.Delta.Type {
-	case "text_delta":
-		return t.emitEvent(string(types.EventResponseOutputTextDelta), map[string]interface{}{
-			"type":            string(types.EventResponseOutputTextDelta),
-			"sequence_number": t.nextSeq(),
-			"output_index":    e.Index,
-			"delta":           e.Delta.Text,
-		})
-	case "input_json_delta":
-		// Accumulate arguments
-		t.toolCallArgs[e.Index] += e.Delta.PartialJSON
-		return t.emitEvent(string(types.EventResponseFunctionCallArgumentsDelta), map[string]interface{}{
-			"type":            string(types.EventResponseFunctionCallArgumentsDelta),
-			"sequence_number": t.nextSeq(),
-			"output_index":    e.Index,
-			"delta":           e.Delta.PartialJSON,
-		})
-	}
-	return nil
-}
-
-func (t *AnthropicToResponsesTransformer) handleContentBlockStop(data string) error {
-	var e types.AnthropicContentBlockStopEvent
-	if err := json.Unmarshal([]byte(data), &e); err != nil {
-		return err
-	}
-
-	blockType := t.blockTypeMap[e.Index]
-	switch blockType {
-	case "text":
-		if err := t.emitEvent(string(types.EventResponseOutputTextDone), map[string]interface{}{
-			"type":            string(types.EventResponseOutputTextDone),
-			"sequence_number": t.nextSeq(),
-			"output_index":    e.Index,
-		}); err != nil {
-			return err
-		}
-	case "tool_use":
-		args := t.toolCallArgs[e.Index]
-		if err := t.emitEvent(string(types.EventResponseFunctionCallArgumentsDone), map[string]interface{}{
-			"type":            string(types.EventResponseFunctionCallArgumentsDone),
-			"sequence_number": t.nextSeq(),
-			"output_index":    e.Index,
-			"arguments":       args,
-		}); err != nil {
-			return err
-		}
-	}
-
-	// Emit output_item.done
-	return t.emitEvent(string(types.EventResponseOutputItemDone), map[string]interface{}{
-		"type":            string(types.EventResponseOutputItemDone),
-		"sequence_number": t.nextSeq(),
-		"output_index":    e.Index,
-	})
-}
-
-func (t *AnthropicToResponsesTransformer) handleMessageDelta(data string) error {
-	var e types.AnthropicMessageDeltaEvent
-	if err := json.Unmarshal([]byte(data), &e); err != nil {
-		return err
-	}
-
-	status := "completed"
-	eventType := types.EventResponseCompleted
-	if e.Delta.StopReason == "max_tokens" {
-		status = "incomplete"
-		eventType = types.EventResponseIncomplete
-	}
-
-	// Calculate total tokens (include cache in input for OpenAI format)
-	inputTokens := t.inputTokens + t.cacheReadInputTokens
-	totalTokens := inputTokens + e.Usage.OutputTokens
-
-	finalResp := &types.ResponsesResponse{
-		ID:     t.responseID,
-		Object: "response",
-		Model:  t.model,
-		Status: status,
-		Usage: &types.ResponsesUsage{
-			InputTokens:  inputTokens,
-			OutputTokens: e.Usage.OutputTokens,
-			TotalTokens:  totalTokens,
-			InputTokensDetails: &types.InputTokensDetails{
-				CachedTokens: t.cacheReadInputTokens,
-			},
-		},
-	}
-
-	if err := t.emitEvent(string(eventType), map[string]interface{}{
-		"type":            string(eventType),
-		"sequence_number": t.nextSeq(),
-		"response":        finalResp,
-	}); err != nil {
-		return err
-	}
-	t.completed = true
-	return nil
-}
-
-func (t *AnthropicToResponsesTransformer) emitEvent(eventType string, event map[string]interface{}) error {
-	data, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return WriteSSEEvent(t.w, eventType, string(data))
-}
-
-// Flush flushes any pending data.
-func (t *AnthropicToResponsesTransformer) Flush() error {
-	return nil
-}
-
-// Close closes the transformer.
-func (t *AnthropicToResponsesTransformer) Close() error {
-	if !t.completed {
-		// Emit response.completed if not already done
-		finalResp := &types.ResponsesResponse{
-			ID:     t.responseID,
-			Object: "response",
-			Model:  t.model,
-			Status: "completed",
-		}
-		return t.emitEvent(string(types.EventResponseCompleted), map[string]interface{}{
-			"type":            string(types.EventResponseCompleted),
-			"sequence_number": t.nextSeq(),
-			"response":        finalResp,
-		})
-	}
-	return nil
-}
-
-// Initialize prepares the transformer and emits initial events before upstream request.
-// For AnthropicToResponsesTransformer, this is a no-op as response.created is emitted on first event.
-func (t *AnthropicToResponsesTransformer) Initialize() error {
-	return nil
-}
-
-// HandleCancel handles cancellation requests.
-// For AnthropicToResponsesTransformer, this is a no-op.
-func (t *AnthropicToResponsesTransformer) HandleCancel() error {
-	return nil
-}
-
-// Process handles a pipeline event for the AnthropicToResponsesTransformer.
-// It implements the transform.Stage interface.
-//
-// @brief Implements transform.Stage.Process for Anthropic event and done events.
-//
-// @param event The pipeline event to process.
-//
-// @return error Returns nil on success.
-func (t *AnthropicToResponsesTransformer) Process(event transform.PipelineEvent) error {
-	switch event.Type {
-	case transform.EventAnthropicEvent:
-		if len(event.Data) == 0 || string(event.Data) == "[DONE]" {
-			return nil
-		}
-		return t.handleAnthropicEventData(event.Data)
-	case transform.EventDone:
-		return t.Close()
-	default:
-		return nil
-	}
-}
-
-// handleAnthropicEventData parses and dispatches an Anthropic event from raw JSON.
-func (t *AnthropicToResponsesTransformer) handleAnthropicEventData(data []byte) error {
-	var base struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &base); err != nil {
-		return nil
-	}
-
-	switch base.Type {
-	case "message_start":
-		return t.handleMessageStart(string(data))
-	case "content_block_start":
-		return t.handleContentBlockStart(string(data))
-	case "content_block_delta":
-		return t.handleContentBlockDelta(string(data))
-	case "content_block_stop":
-		return t.handleContentBlockStop(string(data))
-	case "message_delta":
-		return t.handleMessageDelta(string(data))
-	}
-	return nil
 }

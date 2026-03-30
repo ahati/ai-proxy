@@ -145,7 +145,10 @@ func TestPathTraversalInFileRefs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// URLs should be passed through without path validation
 			// This tests the extractMediaType function which handles data URLs
-			mediaType := extractMediaType(tt.url)
+			mediaType, _, err := ParseDataURI(tt.url)
+			if err != nil {
+				mediaType = ""
+			}
 			// Should return empty string for non-data URLs (not a validation failure)
 			if strings.HasPrefix(tt.url, "data:") && mediaType == "" {
 				t.Logf("non-data URL correctly returns empty media type: %q", tt.url)

@@ -1,21 +1,6 @@
 package transform
 
-import (
-	"encoding/json"
-)
-
-// Helper functions for SSE parsing
-
-// findSSEEnd finds the end of an SSE event (double newline).
-// Returns the index after the \n\n, or -1 if not found.
-func findSSEEnd(data []byte) int {
-	for i := 0; i < len(data)-1; i++ {
-		if data[i] == '\n' && data[i+1] == '\n' {
-			return i + 2
-		}
-	}
-	return -1
-}
+// Helper functions for SSE parsing (used by exported functions below)
 
 // extractSSEData extracts the JSON data from an SSE event.
 // Returns (json, false) for data events, ("", true) for [DONE].
@@ -54,47 +39,25 @@ func extractSSEData(event []byte) (string, bool) {
 	return content, false
 }
 
-// extractAnthropicSSEData extracts JSON from an Anthropic SSE event.
-// Handles both "event: type\ndata: {...}\n\n" and "data: {...}\n\n" formats.
-func extractAnthropicSSEData(event []byte) string {
-	// Look for "data: " in the event
-	dataPrefix := []byte("data: ")
-	dataStart := -1
-	for i := 0; i <= len(event)-len(dataPrefix); i++ {
-		if string(event[i:i+len(dataPrefix)]) == string(dataPrefix) {
-			dataStart = i + len(dataPrefix)
-			break
+// splitSSELines splits SSE data into individual lines.
+func splitSSELines(data []byte) [][]byte {
+	var lines [][]byte
+	start := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			if i > start {
+				lines = append(lines, data[start:i])
+			}
+			start = i + 1
 		}
 	}
-
-	if dataStart == -1 {
-		return ""
+	if start < len(data) {
+		lines = append(lines, data[start:])
 	}
-
-	// Extract content until end of line
-	data := event[dataStart:]
-	end := len(data)
-	for i, b := range data {
-		if b == '\n' {
-			end = i
-			break
-		}
-	}
-
-	return string(data[:end])
+	return lines
 }
 
-// extractEventType extracts the "type" field value from a JSON object.
-// Returns empty string if not found.
-func extractEventType(jsonStr string) string {
-	var obj struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal([]byte(jsonStr), &obj); err != nil {
-		return ""
-	}
-	return obj.Type
-}
+// Exported helper functions
 
 // ExtractJSONFromSSE extracts the JSON payload from OpenAI-style SSE data.
 // Input: "data: {...}\n\n" → Output: "{...}"
@@ -132,22 +95,4 @@ func ExtractAnthropicEventFromSSE(data []byte) (string, string) {
 	}
 
 	return eventType, jsonData
-}
-
-// splitSSELines splits SSE data into individual lines.
-func splitSSELines(data []byte) [][]byte {
-	var lines [][]byte
-	start := 0
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\n' {
-			if i > start {
-				lines = append(lines, data[start:i])
-			}
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-	return lines
 }

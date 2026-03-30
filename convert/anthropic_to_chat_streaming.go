@@ -56,19 +56,6 @@ func NewAnthropicToChatStreamingConverter(w io.Writer) *AnthropicToChatStreaming
 	}
 }
 
-// NewAnthropicToChatStreamingConverterWithReceiver creates a converter that sends to a receiver.
-//
-// @brief Creates a new streaming converter sending chunks to a receiver.
-//
-// @param receiver The OpenAIChatReceiver to send chunk JSON to.
-//
-// @return *AnthropicToChatStreamingConverter A new converter instance.
-func NewAnthropicToChatStreamingConverterWithReceiver(receiver transform.OpenAIChatReceiver) *AnthropicToChatStreamingConverter {
-	return &AnthropicToChatStreamingConverter{
-		receiver: receiver,
-	}
-}
-
 // Process handles a pipeline event for the AnthropicToChatStreamingConverter.
 // It implements the transform.Stage interface.
 //

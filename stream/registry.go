@@ -73,22 +73,3 @@ func (r *Registry) Remove(id string) {
 	defer r.mu.Unlock()
 	delete(r.streams, id)
 }
-
-// Get retrieves an active stream by ID.
-func (r *Registry) Get(id string) *ActiveStream {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.streams[id]
-}
-
-// List returns all active stream IDs.
-func (r *Registry) List() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	ids := make([]string, 0, len(r.streams))
-	for id := range r.streams {
-		ids = append(ids, id)
-	}
-	return ids
-}

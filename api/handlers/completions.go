@@ -219,11 +219,11 @@ func (h *CompletionsHandler) CreateTransformer(w io.Writer) transform.SSETransfo
 	}
 
 	cfg := transform.Config{
-		UpstreamFormat:         h.route.OutputProtocol,
-		DownstreamFormat:       "openai",
-		KimiToolCallTransform:  h.route.KimiToolCallTransform,
-		GLM5ToolCallTransform:  h.route.GLM5ToolCallTransform,
-		ReasoningSplit:         h.route.ReasoningSplit,
+		UpstreamFormat:        h.route.OutputProtocol,
+		DownstreamFormat:      "openai",
+		KimiToolCallTransform: h.route.KimiToolCallTransform,
+		GLM5ToolCallTransform: h.route.GLM5ToolCallTransform,
+		ReasoningSplit:        h.route.ReasoningSplit,
 	}
 
 	t, err := pipeline.BuildPipeline(w, cfg)

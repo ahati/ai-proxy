@@ -127,15 +127,6 @@ func (s *Server) setupRoutes() {
 //
 //	May be empty, in which case no action is taken.
 //
-// @pre s.router != nil
-// @post Middleware functions are added to the processing chain.
-func (s *Server) Use(middleware ...gin.HandlerFunc) {
-	s.router.Use(middleware...)
-}
-
-// Run starts the HTTP server on the specified address.
-// This method blocks until the server encounters an error or is shut down.
-//
 // @param addr - Network address to listen on in "host:port" format.
 //
 //	Empty host defaults to all interfaces. Empty port uses default.

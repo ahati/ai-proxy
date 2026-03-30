@@ -74,9 +74,9 @@ func TestResponsesToAnthropicConverter_Convert(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := TransformResponsesToAnthropic([]byte(tt.input))
+			output, err := TransformResponsesToAnthropicWithOptions([]byte(tt.input), nil, true)
 			if err != nil {
-				t.Fatalf("TransformResponsesToAnthropic returned error: %v", err)
+				t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
 			}
 			tt.validate(t, output)
 		})
@@ -210,9 +210,9 @@ func TestResponsesToAnthropicConverter_StructuredContentAndToolChoice(t *testing
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := TransformResponsesToAnthropic([]byte(tt.input))
+			output, err := TransformResponsesToAnthropicWithOptions([]byte(tt.input), nil, true)
 			if err != nil {
-				t.Fatalf("TransformResponsesToAnthropic returned error: %v", err)
+				t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
 			}
 			tt.validate(t, output)
 		})
@@ -231,9 +231,9 @@ func TestResponsesToAnthropicConverter_MergeAssistantAndToolOutputs(t *testing.T
 		]
 	}`
 
-	output, err := TransformResponsesToAnthropic([]byte(input))
+	output, err := TransformResponsesToAnthropicWithOptions([]byte(input), nil, true)
 	if err != nil {
-		t.Fatalf("TransformResponsesToAnthropic returned error: %v", err)
+		t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
 	}
 
 	var req types.MessageRequest
@@ -326,9 +326,9 @@ func TestResponsesToAnthropicConverter_PreviousResponseID(t *testing.T) {
 		"previous_response_id": "resp_prev123"
 	}`
 
-	output, err := TransformResponsesToAnthropic([]byte(input))
+	output, err := TransformResponsesToAnthropicWithOptions([]byte(input), nil, true)
 	if err != nil {
-		t.Fatalf("TransformResponsesToAnthropic returned error: %v", err)
+		t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
 	}
 
 	var req types.MessageRequest
@@ -626,9 +626,9 @@ func TestTransformResponsesToAnthropic_ReasoningToThinking(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := TransformResponsesToAnthropic([]byte(tt.input))
+			output, err := TransformResponsesToAnthropicWithOptions([]byte(tt.input), nil, true)
 			if err != nil {
-				t.Fatalf("TransformResponsesToAnthropic returned error: %v", err)
+				t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
 			}
 
 			var req types.MessageRequest
@@ -697,9 +697,9 @@ func TestExtractContentFromInput_Refusal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := TransformResponsesToAnthropic([]byte(tt.input))
+			output, err := TransformResponsesToAnthropicWithOptions([]byte(tt.input), nil, true)
 			if err != nil {
-				t.Fatalf("TransformResponsesToAnthropic returned error: %v", err)
+				t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
 			}
 
 			var req types.MessageRequest
@@ -767,9 +767,9 @@ func TestExtractContentFromInput_InputFile(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := TransformResponsesToAnthropic([]byte(tt.input))
+			output, err := TransformResponsesToAnthropicWithOptions([]byte(tt.input), nil, true)
 			if err != nil {
-				t.Fatalf("TransformResponsesToAnthropic returned error: %v", err)
+				t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
 			}
 
 			var req types.MessageRequest

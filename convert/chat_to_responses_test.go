@@ -1746,40 +1746,6 @@ func TestTransformChatToResponses(t *testing.T) {
 	}
 }
 
-// TestChatToResponsesConverter_Convert tests the converter interface.
-func TestChatToResponsesConverter_Convert(t *testing.T) {
-	converter := NewChatToResponsesConverter()
-
-	input := `{
-		"model": "gpt-4o",
-		"messages": [
-			{"role": "system", "content": "Be helpful."},
-			{"role": "user", "content": "Hello"}
-		],
-		"max_tokens": 500
-	}`
-
-	output, err := converter.Convert([]byte(input))
-	if err != nil {
-		t.Fatalf("Convert returned error: %v", err)
-	}
-
-	var req types.ResponsesRequest
-	if err := json.Unmarshal(output, &req); err != nil {
-		t.Fatalf("Failed to parse output: %v", err)
-	}
-
-	if req.Model != "gpt-4o" {
-		t.Errorf("Expected model gpt-4o, got %s", req.Model)
-	}
-	if req.Instructions != "Be helpful." {
-		t.Errorf("Expected instructions 'Be helpful.', got %q", req.Instructions)
-	}
-	if req.MaxOutputTokens != 500 {
-		t.Errorf("Expected max_output_tokens 500, got %d", req.MaxOutputTokens)
-	}
-}
-
 // ============================================================================
 // Incomplete Response Tests (finish_reason:"length" mapping)
 // ============================================================================

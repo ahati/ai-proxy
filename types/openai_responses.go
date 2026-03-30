@@ -401,39 +401,3 @@ type MessageOutputItem struct {
 	// Content contains the message content parts.
 	Content []map[string]interface{} `json:"content"`
 }
-
-// NewReasoningOutputItem creates a new reasoning output item.
-// The ID should follow the "rs_xxx" format convention.
-func NewReasoningOutputItem(id, summaryText string) *ReasoningOutputItem {
-	return &ReasoningOutputItem{
-		Type: "reasoning",
-		ID:   id,
-		Summary: []SummaryTextItem{
-			{Type: "summary_text", Text: summaryText},
-		},
-	}
-}
-
-// NewFunctionCallOutputItem creates a new function_call output item.
-// The ID should be the tool call ID from Anthropic (e.g., "toolu_xxx").
-func NewFunctionCallOutputItem(id, name, arguments string) *FunctionCallOutputItem {
-	return &FunctionCallOutputItem{
-		Type:      "function_call",
-		ID:        id,
-		CallID:    id,
-		Name:      name,
-		Arguments: arguments,
-	}
-}
-
-// NewMessageOutputItem creates a new message output item.
-// The content should be an array of content parts (e.g., output_text).
-func NewMessageOutputItem(id string, content []map[string]interface{}) *MessageOutputItem {
-	return &MessageOutputItem{
-		Type:    "message",
-		ID:      id,
-		Status:  "completed",
-		Role:    "assistant",
-		Content: content,
-	}
-}

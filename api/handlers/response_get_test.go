@@ -55,7 +55,7 @@ func TestResponseGetHandler_Handle_Success(t *testing.T) {
 
 func TestResponseGetHandler_Handle_NotFound(t *testing.T) {
 	conversation.InitDefaultStore(conversation.Config{MaxSize: 100, TTL: time.Hour})
-	conversation.DefaultStore.Clear()
+	conversation.InitDefaultStore(conversation.Config{MaxSize: 1000, TTL: 24 * time.Hour})
 
 	router := gin.New()
 	router.GET("/v1/responses/:id", NewResponseGetHandler())
@@ -132,7 +132,7 @@ func TestResponseInputItemsHandler_Handle_Success(t *testing.T) {
 
 func TestResponseInputItemsHandler_Handle_NotFound(t *testing.T) {
 	conversation.InitDefaultStore(conversation.Config{MaxSize: 100, TTL: time.Hour})
-	conversation.DefaultStore.Clear()
+	conversation.InitDefaultStore(conversation.Config{MaxSize: 1000, TTL: 24 * time.Hour})
 
 	router := gin.New()
 	router.GET("/v1/responses/:id/input_items", NewResponseInputItemsHandler())
@@ -149,7 +149,7 @@ func TestResponseInputItemsHandler_Handle_NotFound(t *testing.T) {
 
 func TestResponseInputItemsHandler_Handle_ListFormat(t *testing.T) {
 	conversation.InitDefaultStore(conversation.Config{MaxSize: 100, TTL: time.Hour})
-	conversation.DefaultStore.Clear()
+	conversation.InitDefaultStore(conversation.Config{MaxSize: 1000, TTL: 24 * time.Hour})
 
 	testConv := &conversation.Conversation{
 		ID:        "resp_list_test",

@@ -223,12 +223,12 @@ func (h *MessagesHandler) CreateTransformer(w io.Writer) transform.SSETransforme
 	}
 
 	cfg := transform.Config{
-		UpstreamFormat:         h.route.OutputProtocol,
-		DownstreamFormat:       "anthropic",
-		KimiToolCallTransform:  h.route.KimiToolCallTransform,
-		GLM5ToolCallTransform:  h.route.GLM5ToolCallTransform,
-		ReasoningSplit:         h.route.ReasoningSplit,
-		WebSearchEnabled:       websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled(),
+		UpstreamFormat:        h.route.OutputProtocol,
+		DownstreamFormat:      "anthropic",
+		KimiToolCallTransform: h.route.KimiToolCallTransform,
+		GLM5ToolCallTransform: h.route.GLM5ToolCallTransform,
+		ReasoningSplit:        h.route.ReasoningSplit,
+		WebSearchEnabled:      websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled(),
 	}
 
 	t, err := pipeline.BuildPipeline(w, cfg)

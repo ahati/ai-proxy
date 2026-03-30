@@ -132,4 +132,3 @@ func TestConvertWebSearchContentToText(t *testing.T) {
 		})
 	}
 }
-

@@ -137,66 +137,6 @@ func TestServer_setupRoutes_RouteCount(t *testing.T) {
 	}
 }
 
-func TestServer_Use(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	cfg := &config.Config{}
-	server := NewServer(cfg)
-
-	var middlewareCalled bool
-	server.Use(func(c *gin.Context) {
-		middlewareCalled = true
-		c.Next()
-	})
-
-	server.router.GET("/test-middleware", func(c *gin.Context) {
-		c.Status(http.StatusOK)
-	})
-
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/test-middleware", nil)
-	server.router.ServeHTTP(w, req)
-
-	if !middlewareCalled {
-		t.Error("middleware was not called")
-	}
-}
-
-func TestServer_Use_MultipleMiddlewares(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	cfg := &config.Config{}
-	server := NewServer(cfg)
-
-	callOrder := []int{}
-	server.Use(
-		func(c *gin.Context) {
-			callOrder = append(callOrder, 1)
-			c.Next()
-		},
-		func(c *gin.Context) {
-			callOrder = append(callOrder, 2)
-			c.Next()
-		},
-	)
-
-	server.router.GET("/test-multi-middleware", func(c *gin.Context) {
-		callOrder = append(callOrder, 3)
-		c.Status(http.StatusOK)
-	})
-
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/test-multi-middleware", nil)
-	server.router.ServeHTTP(w, req)
-
-	if len(callOrder) != 3 {
-		t.Errorf("expected 3 calls (2 middleware + handler), got %d", len(callOrder))
-	}
-	if callOrder[0] != 1 || callOrder[1] != 2 || callOrder[2] != 3 {
-		t.Errorf("call order wrong: got %v, expected [1 2 3]", callOrder)
-	}
-}
-
 func TestServer_Routes_HealthCheck(t *testing.T) {
 	cfg := &config.Config{}
 	server := NewServer(cfg)

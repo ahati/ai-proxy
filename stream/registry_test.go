@@ -36,15 +36,6 @@ func TestRegistry_Register(t *testing.T) {
 	if stream.StartedAt.IsZero() {
 		t.Error("StartedAt is zero")
 	}
-
-	// Verify stream is stored
-	retrieved := r.Get("test-id")
-	if retrieved == nil {
-		t.Error("Get() returned nil after Register()")
-	}
-	if retrieved.ID != "test-id" {
-		t.Errorf("retrieved ID = %q, want %q", retrieved.ID, "test-id")
-	}
 }
 
 func TestRegistry_Cancel(t *testing.T) {
@@ -73,12 +64,6 @@ func TestRegistry_Cancel(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 		t.Error("context not cancelled after Cancel()")
 	}
-
-	// Verify stream is removed
-	retrieved := r.Get("test-id")
-	if retrieved != nil {
-		t.Error("Get() returned non-nil after Cancel()")
-	}
 }
 
 func TestRegistry_Cancel_NotFound(t *testing.T) {
@@ -98,63 +83,10 @@ func TestRegistry_Remove(t *testing.T) {
 	r.Register("test-id", cancel, nil)
 	r.Remove("test-id")
 
-	retrieved := r.Get("test-id")
-	if retrieved != nil {
-		t.Error("Get() returned non-nil after Remove()")
-	}
-}
-
-func TestRegistry_Get(t *testing.T) {
-	r := NewRegistry()
-	_, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Get nonexistent stream
-	retrieved := r.Get("nonexistent")
-	if retrieved != nil {
-		t.Error("Get() returned non-nil for nonexistent stream")
-	}
-
-	// Register and get
-	r.Register("test-id", cancel, nil)
-	retrieved = r.Get("test-id")
-	if retrieved == nil {
-		t.Fatal("Get() returned nil for registered stream")
-	}
-	if retrieved.ID != "test-id" {
-		t.Errorf("ID = %q, want %q", retrieved.ID, "test-id")
-	}
-}
-
-func TestRegistry_List(t *testing.T) {
-	r := NewRegistry()
-	_, cancel1 := context.WithCancel(context.Background())
-	defer cancel1()
-	_, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-
-	// Empty registry
-	ids := r.List()
-	if len(ids) != 0 {
-		t.Errorf("List() = %v, want empty slice", ids)
-	}
-
-	// Add streams
-	r.Register("id1", cancel1, nil)
-	r.Register("id2", cancel2, nil)
-
-	ids = r.List()
-	if len(ids) != 2 {
-		t.Errorf("List() returned %d ids, want 2", len(ids))
-	}
-
-	// Verify both IDs are present (order not guaranteed)
-	idSet := make(map[string]bool)
-	for _, id := range ids {
-		idSet[id] = true
-	}
-	if !idSet["id1"] || !idSet["id2"] {
-		t.Errorf("List() = %v, want [id1, id2]", ids)
+	// Verify stream is removed by checking Cancel returns false
+	result := r.Cancel("test-id")
+	if result {
+		t.Error("Cancel() returned true after Remove(), expected false")
 	}
 }
 
@@ -172,15 +104,6 @@ func TestRegistry_ConcurrentAccess(t *testing.T) {
 			defer cancel()
 			r.Register(id, cancel, nil)
 		}(i)
-	}
-
-	// Concurrent reads
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r.List()
-		}()
 	}
 
 	// Concurrent removes

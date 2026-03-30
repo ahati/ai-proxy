@@ -217,10 +217,8 @@ func TestParseFlags_EnvWithSpecialChars(t *testing.T) {
 	}
 }
 
-// --- XDG Discovery Tests ---
-
 func TestDiscoverConfigPath_XDGConfigHome(t *testing.T) {
-	// Create temp directory and config file
+	// Create temp config file
 	tmpDir := t.TempDir()
 	configDir := tmpDir + "/ai-proxy"
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -231,7 +229,6 @@ func TestDiscoverConfigPath_XDGConfigHome(t *testing.T) {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	// Set XDG_CONFIG_HOME
 	os.Setenv("XDG_CONFIG_HOME", tmpDir)
 	os.Unsetenv("XDG_CONFIG_DIRS")
 	defer os.Unsetenv("XDG_CONFIG_HOME")
@@ -243,24 +240,22 @@ func TestDiscoverConfigPath_XDGConfigHome(t *testing.T) {
 }
 
 func TestDiscoverConfigPath_HomeFallback(t *testing.T) {
-	// Create temp directory for HOME fallback
+	// Create temp config file in ~/.config/ai-proxy/
 	tmpDir := t.TempDir()
-	configDir := tmpDir + "/.config/ai-proxy"
-	if err := os.MkdirAll(configDir, 0755); err != nil {
+	homeConfigDir := tmpDir + "/.config/ai-proxy"
+	if err := os.MkdirAll(homeConfigDir, 0755); err != nil {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
-	configPath := configDir + "/config.json"
+	configPath := homeConfigDir + "/config.json"
 	if err := os.WriteFile(configPath, []byte(`{}`), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	// Unset XDG_CONFIG_HOME to trigger HOME fallback
+	// Set HOME to temp dir and unset XDG_CONFIG_HOME
+	os.Setenv("HOME", tmpDir)
 	os.Unsetenv("XDG_CONFIG_HOME")
 	os.Unsetenv("XDG_CONFIG_DIRS")
-
-	// Set XDG_CONFIG_HOME to the fallback path to test the logic
-	os.Setenv("XDG_CONFIG_HOME", tmpDir+"/.config")
-	defer os.Unsetenv("XDG_CONFIG_HOME")
+	defer os.Unsetenv("HOME")
 
 	result := discoverConfigPath()
 	if result != configPath {
@@ -269,43 +264,38 @@ func TestDiscoverConfigPath_HomeFallback(t *testing.T) {
 }
 
 func TestDiscoverConfigPath_XDGConfigDirs(t *testing.T) {
-	// Create temp directories for XDG_CONFIG_DIRS
-	tmpDir1 := t.TempDir()
-	tmpDir2 := t.TempDir()
-
-	// Only tmpDir2 has the config
-	configDir2 := tmpDir2 + "/ai-proxy"
-	if err := os.MkdirAll(configDir2, 0755); err != nil {
+	// Create temp config file in XDG_CONFIG_DIRS path
+	tmpDir := t.TempDir()
+	configDir := tmpDir + "/ai-proxy"
+	if err := os.MkdirAll(configDir, 0755); err != nil {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
-	configPath2 := configDir2 + "/config.json"
-	if err := os.WriteFile(configPath2, []byte(`{}`), 0644); err != nil {
+	configPath := configDir + "/config.json"
+	if err := os.WriteFile(configPath, []byte(`{}`), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	// Set XDG_CONFIG_DIRS with colon-separated paths
 	os.Unsetenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_DIRS", tmpDir1+":"+tmpDir2)
+	os.Setenv("XDG_CONFIG_DIRS", tmpDir)
 	defer os.Unsetenv("XDG_CONFIG_DIRS")
 
 	result := discoverConfigPath()
-	if result != configPath2 {
-		t.Errorf("discoverConfigPath() = %q, want %q", result, configPath2)
+	if result != configPath {
+		t.Errorf("discoverConfigPath() = %q, want %q", result, configPath)
 	}
 }
 
 func TestDiscoverConfigPath_XDGConfigDirs_FirstWins(t *testing.T) {
-	// Create temp directories for XDG_CONFIG_DIRS
+	// Create two config files in different XDG_CONFIG_DIRS paths
 	tmpDir1 := t.TempDir()
 	tmpDir2 := t.TempDir()
 
-	// Both have config files
 	configDir1 := tmpDir1 + "/ai-proxy"
 	if err := os.MkdirAll(configDir1, 0755); err != nil {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
 	configPath1 := configDir1 + "/config.json"
-	if err := os.WriteFile(configPath1, []byte(`{"source":"dir1"}`), 0644); err != nil {
+	if err := os.WriteFile(configPath1, []byte(`{"first":true}`), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
@@ -314,11 +304,10 @@ func TestDiscoverConfigPath_XDGConfigDirs_FirstWins(t *testing.T) {
 		t.Fatalf("Failed to create config dir: %v", err)
 	}
 	configPath2 := configDir2 + "/config.json"
-	if err := os.WriteFile(configPath2, []byte(`{"source":"dir2"}`), 0644); err != nil {
+	if err := os.WriteFile(configPath2, []byte(`{"second":true}`), 0644); err != nil {
 		t.Fatalf("Failed to write config file: %v", err)
 	}
 
-	// Set XDG_CONFIG_DIRS - first path should win
 	os.Unsetenv("XDG_CONFIG_HOME")
 	os.Setenv("XDG_CONFIG_DIRS", tmpDir1+":"+tmpDir2)
 	defer os.Unsetenv("XDG_CONFIG_DIRS")
@@ -400,66 +389,6 @@ func TestFileExists(t *testing.T) {
 			t.Error("fileExists() = true for directory, want false")
 		}
 	})
-}
-
-func TestGetSearchedConfigPaths(t *testing.T) {
-	// Set up environment
-	os.Unsetenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_DIRS", "/etc/xdg:/usr/local/etc/xdg")
-	defer os.Unsetenv("XDG_CONFIG_DIRS")
-
-	paths := GetSearchedConfigPaths()
-
-	if len(paths) < 2 {
-		t.Errorf("GetSearchedConfigPaths() returned %d paths, want at least 2", len(paths))
-	}
-
-	// Check that paths contain ai-proxy/config.json
-	for _, p := range paths {
-		if !containsString(p, "ai-proxy") || !containsString(p, "config.json") {
-			t.Errorf("GetSearchedConfigPaths() returned unexpected path: %s", p)
-		}
-	}
-}
-
-func TestGetSearchedConfigPaths_CustomXDG(t *testing.T) {
-	os.Setenv("XDG_CONFIG_HOME", "/custom/config/home")
-	os.Setenv("XDG_CONFIG_DIRS", "/custom/dir1:/custom/dir2")
-	defer os.Unsetenv("XDG_CONFIG_HOME")
-	defer os.Unsetenv("XDG_CONFIG_DIRS")
-
-	paths := GetSearchedConfigPaths()
-
-	// First path should be from XDG_CONFIG_HOME
-	if len(paths) < 1 {
-		t.Fatal("GetSearchedConfigPaths() returned no paths")
-	}
-	expectedFirst := "/custom/config/home/ai-proxy/config.json"
-	if paths[0] != expectedFirst {
-		t.Errorf("GetSearchedConfigPaths()[0] = %q, want %q", paths[0], expectedFirst)
-	}
-}
-
-func TestNewErrConfigNotFound(t *testing.T) {
-	os.Unsetenv("XDG_CONFIG_HOME")
-	os.Setenv("XDG_CONFIG_DIRS", "/etc/xdg")
-	defer os.Unsetenv("XDG_CONFIG_DIRS")
-
-	err := NewErrConfigNotFound()
-	if err == nil {
-		t.Fatal("NewErrConfigNotFound() returned nil")
-	}
-
-	errMsg := err.Error()
-	if !containsString(errMsg, "config file not found") {
-		t.Errorf("Error message should contain 'config file not found', got: %s", errMsg)
-	}
-	if !containsString(errMsg, "--config-file flag") {
-		t.Errorf("Error message should mention --config-file flag, got: %s", errMsg)
-	}
-	if !containsString(errMsg, "CONFIG_FILE") {
-		t.Errorf("Error message should mention CONFIG_FILE env var, got: %s", errMsg)
-	}
 }
 
 func TestParseFlags_XDGDiscovery(t *testing.T) {

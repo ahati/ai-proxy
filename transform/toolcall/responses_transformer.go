@@ -881,18 +881,6 @@ func (t *ResponsesTransformer) handleContentBlockDelta(event types.Event) error 
 	return nil
 }
 
-// processGLM5ToolCalls handles thinking content that contains GLM-5 XML tool calls.
-// It extracts tool calls and emits appropriate Responses API events.
-func (t *ResponsesTransformer) processGLM5ToolCalls(text string) error {
-	events := t.glm5Parser.Parse(text)
-	for _, e := range events {
-		if err := t.writeParserEvent(e); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // processThinkingWithToolCalls handles thinking content that contains tool call markup.
 // It extracts tool calls and emits appropriate Responses API events.
 func (t *ResponsesTransformer) processThinkingWithToolCalls(text string) error {

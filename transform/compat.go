@@ -6,21 +6,6 @@ import (
 	"github.com/tmaxmax/go-sse"
 )
 
-// StageFromSSETransformer wraps an existing SSETransformer as a Stage.
-// This enables gradual migration: old transformers work in the new pipeline
-// without modification.
-//
-// @brief Adapter that wraps SSETransformer as a Stage.
-//
-// @note The adapter converts PipelineEvents to *sse.Event before calling
-//
-//	Transform. This preserves full backward compatibility.
-//
-// @note Initialize, Flush, Close, and HandleCancel are delegated directly.
-func StageFromSSETransformer(t SSETransformer) Stage {
-	return &sseTransformerAdapter{inner: t}
-}
-
 // SSETransformerFromStage wraps a Stage as an SSETransformer.
 // Used during migration so handlers can still return SSETransformer
 // while the pipeline internally uses Stage.
@@ -30,57 +15,6 @@ func StageFromSSETransformer(t SSETransformer) Stage {
 // @note HandleCancel delegates to Flush (best-effort mapping).
 func SSETransformerFromStage(s Stage) SSETransformer {
 	return &stageAsSSETransformer{inner: s}
-}
-
-// sseTransformerAdapter wraps SSETransformer as a Stage.
-type sseTransformerAdapter struct {
-	inner SSETransformer
-}
-
-// Process converts the PipelineEvent to *sse.Event and delegates to the inner transformer.
-//
-// @brief Implements Stage.Process by converting events and delegating.
-func (a *sseTransformerAdapter) Process(event PipelineEvent) error {
-	switch event.Type {
-	case EventDone:
-		return a.inner.Close()
-	case EventSSE:
-		sseEvent := &sse.Event{
-			Type: event.SSEType,
-			Data: string(event.Data),
-		}
-		return a.inner.Transform(sseEvent)
-	case EventOpenAIChunk:
-		// OpenAI chunks come as SSE "data: {json}\n\n" events
-		sseEvent := &sse.Event{
-			Data: string(event.Data),
-		}
-		return a.inner.Transform(sseEvent)
-	case EventAnthropicEvent:
-		// Anthropic events come as SSE "event: type\ndata: {json}\n\n" events
-		sseEvent := &sse.Event{
-			Type: event.SSEType,
-			Data: string(event.Data),
-		}
-		return a.inner.Transform(sseEvent)
-	default:
-		return nil
-	}
-}
-
-// Initialize delegates to the inner transformer's Initialize.
-func (a *sseTransformerAdapter) Initialize() error {
-	return a.inner.Initialize()
-}
-
-// Flush delegates to the inner transformer's Flush.
-func (a *sseTransformerAdapter) Flush() error {
-	return a.inner.Flush()
-}
-
-// Close delegates to the inner transformer's Close.
-func (a *sseTransformerAdapter) Close() error {
-	return a.inner.Close()
 }
 
 // stageAsSSETransformer wraps a Stage as an SSETransformer.

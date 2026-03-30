@@ -248,17 +248,17 @@ func (h *ResponsesHandler) CreateTransformer(w io.Writer) transform.SSETransform
 	}
 
 	cfg := transform.Config{
-		UpstreamFormat:         h.route.OutputProtocol,
-		DownstreamFormat:       "responses",
-		KimiToolCallTransform:  h.route.KimiToolCallTransform,
-		GLM5ToolCallTransform:  h.route.GLM5ToolCallTransform,
-		ReasoningSplit:         h.route.ReasoningSplit,
-		WebSearchEnabled:       websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled(),
-		InputItems:             h.inputItems,
-		Store:                  h.shouldStore,
-		PreviousResponseID:     h.previousResponseID,
-		ReasoningSummaryMode:   h.reasoningSummaryMode,
-		EncryptedReasoning:     h.encryptedReasoning,
+		UpstreamFormat:        h.route.OutputProtocol,
+		DownstreamFormat:      "responses",
+		KimiToolCallTransform: h.route.KimiToolCallTransform,
+		GLM5ToolCallTransform: h.route.GLM5ToolCallTransform,
+		ReasoningSplit:        h.route.ReasoningSplit,
+		WebSearchEnabled:      websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled(),
+		InputItems:            h.inputItems,
+		Store:                 h.shouldStore,
+		PreviousResponseID:    h.previousResponseID,
+		ReasoningSummaryMode:  h.reasoningSummaryMode,
+		EncryptedReasoning:    h.encryptedReasoning,
 	}
 
 	t, err := pipeline.BuildPipeline(w, cfg)

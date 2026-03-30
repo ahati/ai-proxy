@@ -19,11 +19,11 @@ import (
 //
 // @note The pipeline follows this general stage order:
 //
-//	1. Input parser (parse upstream SSE into PipelineEvents)
-//	2. Tool call extraction (extract from reasoning if enabled)
-//	3. Format conversion (OpenAI ↔ Anthropic ↔ Responses)
-//	4. Web search interception (if enabled)
-//	5. Output writer (write final SSE to io.Writer)
+//  1. Input parser (parse upstream SSE into PipelineEvents)
+//  2. Tool call extraction (extract from reasoning if enabled)
+//  3. Format conversion (OpenAI ↔ Anthropic ↔ Responses)
+//  4. Web search interception (if enabled)
+//  5. Output writer (write final SSE to io.Writer)
 //
 // @param w The final output writer (typically HTTP response writer).
 // @param cfg Pipeline configuration from route resolution.

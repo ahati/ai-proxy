@@ -1,9 +1,5 @@
 package transform
 
-import (
-	"fmt"
-)
-
 // Stage is the unified interface for all pipeline stages.
 // Every transformer and converter implements this single interface,
 // replacing the separate SSETransformer, OpenAIChatReceiver, and
@@ -14,11 +10,6 @@ import (
 // @note The Stage interface follows the same lifecycle as SSETransformer:
 //
 //	Initialize -> Process (multiple calls) -> Flush -> Close
-//
-// @note Stages are chained via Pipeline. Each stage's output becomes the
-//
-//	next stage's input through direct PipelineEvent passing, avoiding
-//	SSE text round-trips.
 //
 // @note Implementations must be safe for single-goroutine use per instance.
 //
@@ -69,107 +60,4 @@ type Stage interface {
 	//
 	// @note Close() calls Flush() internally before releasing resources.
 	Close() error
-}
-
-// Pipeline implements Stage by chaining multiple stages.
-// Events flow through stages in order; the Pipeline itself is a Stage
-// so pipelines can be nested.
-//
-// @brief Chains multiple Stage instances into a single Stage.
-//
-// @note Events are sent to the first stage. Each stage is responsible
-//
-//	for emitting transformed events to its downstream stage.
-//	In practice, most stages write directly to an output sink
-//	(the final stage in the chain).
-//
-// @note Pipeline implements Stage, enabling nested pipeline composition.
-type Pipeline struct {
-	stages []Stage
-}
-
-// NewPipeline creates a new Pipeline from the given stages.
-//
-// @brief Creates a Pipeline that chains the given stages.
-//
-// @param stages The stages to chain, in processing order.
-//
-// @return *Pipeline A new Pipeline instance.
-//
-// @pre stages must not be empty.
-// @post The pipeline is ready for Initialize/Process/Flush/Close calls.
-func NewPipeline(stages ...Stage) *Pipeline {
-	return &Pipeline{stages: stages}
-}
-
-// Stages returns the slice of stages in this pipeline.
-// Used for testing and introspection.
-//
-// @brief Returns the stages in this pipeline.
-//
-// @return []Stage The ordered stages.
-func (p *Pipeline) Stages() []Stage {
-	return p.stages
-}
-
-// Process sends the event through all stages in sequence.
-//
-// @brief Implements Stage.Process by forwarding to all stages.
-//
-// @param event The pipeline event to process.
-//
-// @return error Returns the first error encountered from any stage.
-//
-// @note Processing stops at the first error.
-func (p *Pipeline) Process(event PipelineEvent) error {
-	for _, stage := range p.stages {
-		if err := stage.Process(event); err != nil {
-			return fmt.Errorf("pipeline stage %T: %w", stage, err)
-		}
-	}
-	return nil
-}
-
-// Initialize calls Initialize on all stages in order.
-//
-// @brief Implements Stage.Initialize.
-//
-// @return error Returns the first error from any stage.
-func (p *Pipeline) Initialize() error {
-	for _, stage := range p.stages {
-		if err := stage.Initialize(); err != nil {
-			return fmt.Errorf("pipeline stage %T: %w", stage, err)
-		}
-	}
-	return nil
-}
-
-// Flush calls Flush on all stages in order.
-//
-// @brief Implements Stage.Flush.
-//
-// @return error Returns the first error from any stage.
-func (p *Pipeline) Flush() error {
-	for _, stage := range p.stages {
-		if err := stage.Flush(); err != nil {
-			return fmt.Errorf("pipeline stage %T: %w", stage, err)
-		}
-	}
-	return nil
-}
-
-// Close calls Close on all stages in reverse order (last stage first).
-// Reverse order ensures downstream stages are closed before upstream ones.
-//
-// @brief Implements Stage.Close.
-//
-// @return error Returns the first error from any stage.
-func (p *Pipeline) Close() error {
-	var firstErr error
-	for i := len(p.stages) - 1; i >= 0; i-- {
-		if err := p.stages[i].Close(); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("pipeline stage %T: %w", p.stages[i], err)
-		}
-	}
-	return firstErr
 }

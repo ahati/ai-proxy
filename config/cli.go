@@ -5,7 +5,6 @@ package config
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -126,55 +125,4 @@ func fileExists(path string) bool {
 		return false
 	}
 	return !info.IsDir()
-}
-
-// GetSearchedConfigPaths returns a list of all config paths that were searched.
-// This is useful for error messages when no config is found.
-//
-// @return []string - list of searched paths in priority order
-func GetSearchedConfigPaths() []string {
-	const configSubdir = "ai-proxy"
-	const configFilename = "config.json"
-	var paths []string
-
-	// XDG_CONFIG_HOME (or HOME/.config fallback)
-	xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-	if xdgConfigHome == "" {
-		homeDir, err := os.UserHomeDir()
-		if err == nil {
-			xdgConfigHome = filepath.Join(homeDir, ".config")
-		}
-	}
-	if xdgConfigHome != "" {
-		paths = append(paths, filepath.Join(xdgConfigHome, configSubdir, configFilename))
-	}
-
-	// XDG_CONFIG_DIRS
-	xdgConfigDirs := os.Getenv("XDG_CONFIG_DIRS")
-	if xdgConfigDirs == "" {
-		xdgConfigDirs = "/etc/xdg"
-	}
-	for _, dir := range strings.Split(xdgConfigDirs, ":") {
-		if dir != "" {
-			paths = append(paths, filepath.Join(dir, configSubdir, configFilename))
-		}
-	}
-
-	return paths
-}
-
-// NewErrConfigNotFound creates a detailed error message listing all searched paths.
-//
-// @return error - error with detailed message
-func NewErrConfigNotFound() error {
-	var msg strings.Builder
-	msg.WriteString("config file not found. Searched locations:\n")
-	msg.WriteString("  --config-file flag (not provided)\n")
-	msg.WriteString("  CONFIG_FILE environment variable (not set)\n")
-
-	for _, path := range GetSearchedConfigPaths() {
-		msg.WriteString(fmt.Sprintf("  %s\n", path))
-	}
-
-	return errors.New(msg.String())
 }

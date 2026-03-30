@@ -111,12 +111,6 @@ func InitDefaultService(cfg types.WebSearchConfig) *Service {
 // DefaultService is the global web search service instance.
 var DefaultService *Service
 
-// GetDefaultService returns the global web search service instance.
-// Returns nil if InitDefaultService hasn't been called or if web search is disabled.
-func GetDefaultService() *Service {
-	return DefaultService
-}
-
 // GetDefaultAdapter returns an adapter for the default web search service.
 // Returns nil if web search is not enabled.
 func GetDefaultAdapter() *TransformerAdapter {

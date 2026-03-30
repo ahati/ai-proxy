@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 
 	"ai-proxy/config"
 	"ai-proxy/logging"
@@ -50,8 +49,6 @@ type Service struct {
 	client *http.Client
 	// local is the local summarizer instance (for local mode, nil if not available).
 	local localSummarizer
-	// mu protects access to local summarizer during Close.
-	mu sync.Mutex
 }
 
 // InitDefaultService initializes the global summarizer service from the schema.
@@ -321,23 +318,4 @@ func (s *Service) summarizeHTTP(ctx context.Context, reasoningContent string) (s
 		summarizeResp.Usage.PromptTokens, summarizeResp.Usage.CompletionTokens)
 
 	return summary, nil
-}
-
-// Close releases resources held by the service.
-// This is important for local mode to free GPU memory.
-func (s *Service) Close() {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.local != nil {
-		s.local.Close()
-		s.local = nil
-	}
-}
-
-// IsEnabled returns true if the summarizer service is enabled and ready.
-func (s *Service) IsEnabled() bool {
-	return s != nil
 }

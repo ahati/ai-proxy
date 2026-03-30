@@ -73,9 +73,6 @@ func TestNewService_Success(t *testing.T) {
 	if svc == nil {
 		t.Fatal("expected non-nil service")
 	}
-	if !svc.IsEnabled() {
-		t.Error("expected IsEnabled to return true")
-	}
 }
 
 func TestNewService_LocalModeMissingModel(t *testing.T) {

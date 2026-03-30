@@ -22,21 +22,6 @@ import (
 // Chat Completions → Responses — Request
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ChatToResponsesConverter converts OpenAI ChatCompletionRequest to ResponsesRequest.
-// It implements the RequestConverter interface for the Chat to Responses conversion.
-type ChatToResponsesConverter struct{}
-
-// NewChatToResponsesConverter creates a new converter for Chat to Responses format.
-func NewChatToResponsesConverter() *ChatToResponsesConverter {
-	return &ChatToResponsesConverter{}
-}
-
-// Convert transforms an OpenAI ChatCompletionRequest body to ResponsesRequest format.
-// This is the main entry point for request conversion.
-func (c *ChatToResponsesConverter) Convert(body []byte) ([]byte, error) {
-	return TransformChatToResponses(body)
-}
-
 // TransformChatToResponses converts a Chat Completions request body to Responses API format.
 // This is the main entry point for the Chat→Responses request transformation.
 //
