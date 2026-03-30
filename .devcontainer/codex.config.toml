@@ -1,7 +1,7 @@
 # ==========================================
 # GLOBAL SETTINGS & DEFAULTS
 # ==========================================
-model = "glm-5.1"
+model = "qwen3.5-plus"
 model_provider = "proxy_ai"
 model_catalog_json = "/home/vscode/custom_models.json"
 disabled_providers = ["opencode"]
