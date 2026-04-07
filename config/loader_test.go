@@ -499,8 +499,8 @@ func TestLoaderValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loader := NewLoader()
-			err := loader.validate(&tt.schema)
+			_ = NewLoader() // ensure construction works
+			err := Validate(&tt.schema)
 
 			if tt.wantErr {
 				if err == nil {
@@ -1010,9 +1010,9 @@ func TestLoaderValidateEdgeCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loader := NewLoader()
+			_ = NewLoader() // ensure construction works
 			schema := tt.setupSchema()
-			err := loader.validate(schema)
+			err := Validate(schema)
 
 			if tt.wantErr {
 				if err == nil {

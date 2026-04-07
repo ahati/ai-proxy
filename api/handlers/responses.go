@@ -40,9 +40,8 @@ type ResponsesHandler struct {
 	// cfg contains the application configuration including providers and models.
 	// Must not be nil after construction.
 	cfg *config.Config
-	// router resolves model names to providers and routes.
-	// Must not be nil after construction.
-	router router.Router
+	// manager provides thread-safe access to the live configuration.
+	manager *config.ConfigManager
 	// route is the resolved route for the current request.
 	// Set during ValidateRequest for use in subsequent methods.
 	route *router.ResolvedRoute
@@ -68,16 +67,16 @@ type ResponsesHandler struct {
 // Creates a new handler instance per request to avoid race conditions with mutable state.
 //
 // @param cfg - Application configuration. Must not be nil.
-// @param r - Router for model resolution. Must not be nil.
+// @param m - ConfigManager for live config access. Must not be nil.
 // @return Gin handler function that processes responses requests.
 //
 // @pre cfg != nil
-// @pre r != nil
-func NewResponsesHandler(cfg *config.Config, r router.Router) gin.HandlerFunc {
+// @pre m != nil
+func NewResponsesHandler(cfg *config.Config, m *config.ConfigManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := &ResponsesHandler{
 			cfg:    cfg,
-			router: r,
+			manager: m,
 		}
 		Handle(h)(c)
 	}
@@ -99,7 +98,11 @@ func (h *ResponsesHandler) ValidateRequest(body []byte) error {
 	}
 
 	// Resolve the model to a route with protocol context
-	route, err := h.router.ResolveWithProtocol(req.Model, "responses")
+	modelRouter := newRouterFromManager(h.manager)
+	if modelRouter == nil {
+		return fmt.Errorf("configuration not available")
+	}
+	route, err := modelRouter.ResolveWithProtocol(req.Model, "responses")
 	if err != nil {
 		return fmt.Errorf("failed to resolve model '%s': %w", req.Model, err)
 	}

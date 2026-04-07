@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,55 +16,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// mockRouter implements router.Router for testing.
-type mockRouter struct {
-	models    map[string]*router.ResolvedRoute
-	providers map[string]config.Provider
-}
-
-func newMockRouter() *mockRouter {
-	return &mockRouter{
-		models:    make(map[string]*router.ResolvedRoute),
-		providers: make(map[string]config.Provider),
-	}
-}
-
-func (m *mockRouter) Resolve(modelName string) (*router.ResolvedRoute, error) {
-	if route, ok := m.models[modelName]; ok {
-		return route, nil
-	}
-	return nil, fmt.Errorf("unknown model: '%s'", modelName)
-}
-
-func (m *mockRouter) GetProvider(name string) (config.Provider, bool) {
-	p, ok := m.providers[name]
-	return p, ok
-}
-
-func (m *mockRouter) ListModels() []string {
-	models := make([]string, 0, len(m.models))
-	for name := range m.models {
-		models = append(models, name)
-	}
-	return models
-}
-
-func (m *mockRouter) ResolveWithProtocol(modelName, incomingProtocol string) (*router.ResolvedRoute, error) {
-	// For mock, just return the base route - protocol handling is tested in router package
-	return m.Resolve(modelName)
-}
-
 // TestResponsesHandler_ValidateRequest tests request validation.
 func TestResponsesHandler_ValidateRequest(t *testing.T) {
-	mockR := newMockRouter()
-	mockR.models["gpt-4o"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "openai",
-			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com/v1"}},
 		},
-		Model:          "gpt-4o",
-		OutputProtocol: "openai",
+		Models: map[string]config.ModelConfig{
+			"gpt-4o": {Provider: "openai", Model: "gpt-4o", Type: "openai"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	tests := []struct {
 		name      string
@@ -108,7 +69,7 @@ func TestResponsesHandler_ValidateRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := &ResponsesHandler{
 				cfg:    &config.Config{},
-				router: mockR,
+				manager: mgr,
 			}
 
 			err := handler.ValidateRequest([]byte(tt.body))
@@ -126,15 +87,15 @@ func TestResponsesHandler_ValidateRequest(t *testing.T) {
 // TestResponsesHandler_ValidateRequest_EncryptedReasoningSize tests that encrypted_reasoning
 // blob size validation prevents memory exhaustion attacks.
 func TestResponsesHandler_ValidateRequest_EncryptedReasoningSize(t *testing.T) {
-	mockR := newMockRouter()
-	mockR.models["gpt-4o"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "openai",
-			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com/v1"}},
 		},
-		Model:          "gpt-4o",
-		OutputProtocol: "openai",
+		Models: map[string]config.ModelConfig{
+			"gpt-4o": {Provider: "openai", Model: "gpt-4o", Type: "openai"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	tests := []struct {
 		name      string
@@ -164,7 +125,7 @@ func TestResponsesHandler_ValidateRequest_EncryptedReasoningSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := &ResponsesHandler{
 				cfg:    &config.Config{},
-				router: mockR,
+				manager: mgr,
 			}
 
 			err := handler.ValidateRequest([]byte(tt.body))
@@ -186,19 +147,19 @@ func TestResponsesHandler_ValidateRequest_EncryptedReasoningSize(t *testing.T) {
 
 // TestResponsesHandler_TransformRequest_OpenAI tests transformation for OpenAI provider.
 func TestResponsesHandler_TransformRequest_OpenAI(t *testing.T) {
-	mockR := newMockRouter()
-	mockR.models["gpt-4o"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "openai",
-			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com/v1"}},
 		},
-		Model:          "gpt-4o",
-		OutputProtocol: "openai",
+		Models: map[string]config.ModelConfig{
+			"gpt-4o": {Provider: "openai", Model: "gpt-4o", Type: "openai"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
-		router: mockR,
+		cfg:     &config.Config{},
+		manager: mgr,
 	}
 
 	// First validate to set the route
@@ -233,19 +194,19 @@ func TestResponsesHandler_TransformRequest_OpenAI(t *testing.T) {
 
 // TestResponsesHandler_TransformRequest_Anthropic tests transformation for Anthropic provider.
 func TestResponsesHandler_TransformRequest_Anthropic(t *testing.T) {
-	mockR := newMockRouter()
-	mockR.models["claude-3-opus"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "anthropic",
-			Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "anthropic", Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"}},
 		},
-		Model:          "claude-3-opus-20240229",
-		OutputProtocol: "anthropic",
+		Models: map[string]config.ModelConfig{
+			"claude-3-opus": {Provider: "anthropic", Model: "claude-3-opus-20240229", Type: "anthropic"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
-		router: mockR,
+		cfg:     &config.Config{},
+		manager: mgr,
 	}
 
 	// First validate to set the route
@@ -333,7 +294,7 @@ func TestResponsesHandler_UpstreamURL(t *testing.T) {
 func TestResponsesHandler_UpstreamURL_NilRoute(t *testing.T) {
 	handler := &ResponsesHandler{
 		cfg:    &config.Config{},
-		router: newMockRouter(),
+		manager: nil,
 	}
 
 	got := handler.UpstreamURL()
@@ -367,7 +328,7 @@ func TestResponsesHandler_ResolveAPIKey(t *testing.T) {
 func TestResponsesHandler_ResolveAPIKey_NilRoute(t *testing.T) {
 	handler := &ResponsesHandler{
 		cfg:    &config.Config{},
-		router: newMockRouter(),
+		manager: nil,
 	}
 
 	w := httptest.NewRecorder()
@@ -491,7 +452,7 @@ func TestResponsesHandler_CreateTransformer_Anthropic(t *testing.T) {
 func TestResponsesHandler_CreateTransformer_NilRoute(t *testing.T) {
 	handler := &ResponsesHandler{
 		cfg:    &config.Config{},
-		router: newMockRouter(),
+		manager: nil,
 	}
 
 	var buf bytes.Buffer
@@ -506,7 +467,7 @@ func TestResponsesHandler_CreateTransformer_NilRoute(t *testing.T) {
 func TestResponsesHandler_WriteError(t *testing.T) {
 	handler := &ResponsesHandler{
 		cfg:    &config.Config{},
-		router: newMockRouter(),
+		manager: nil,
 	}
 
 	w := httptest.NewRecorder()
@@ -535,17 +496,8 @@ func TestResponsesHandler_WriteError(t *testing.T) {
 // TestNewResponsesHandler tests handler creation.
 func TestNewResponsesHandler(t *testing.T) {
 	cfg := &config.Config{}
-	mockR := newMockRouter()
-	mockR.models["gpt-4o"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "openai",
-			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
-		},
-		Model:          "gpt-4o",
-		OutputProtocol: "openai",
-	}
 
-	handler := NewResponsesHandler(cfg, mockR)
+	handler := NewResponsesHandler(cfg, nil)
 
 	if handler == nil {
 		t.Fatal("NewResponsesHandler returned nil")
@@ -554,19 +506,19 @@ func TestNewResponsesHandler(t *testing.T) {
 
 // BenchmarkResponsesHandler_TransformRequest_OpenAI benchmarks OpenAI transformation.
 func BenchmarkResponsesHandler_TransformRequest_OpenAI(b *testing.B) {
-	mockR := newMockRouter()
-	mockR.models["gpt-4o"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "openai",
-			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com/v1"}},
 		},
-		Model:          "gpt-4o",
-		OutputProtocol: "openai",
+		Models: map[string]config.ModelConfig{
+			"gpt-4o": {Provider: "openai", Model: "gpt-4o", Type: "openai"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
-		router: mockR,
+		cfg:     &config.Config{},
+		manager: mgr,
 	}
 	handler.ValidateRequest([]byte(`{"model":"gpt-4o","input":"Hello","stream":true}`))
 
@@ -583,18 +535,19 @@ func BenchmarkResponsesHandler_TransformRequest_OpenAI(b *testing.B) {
 
 // BenchmarkResponsesHandler_TransformRequest_Anthropic benchmarks Anthropic transformation.
 func BenchmarkResponsesHandler_TransformRequest_Anthropic(b *testing.B) {
-	mockR := newMockRouter()
-	mockR.models["claude-3-opus"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "anthropic",
-			Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "anthropic", Endpoints: map[string]string{"anthropic": "https://api.anthropic.com/v1/messages"}},
 		},
-		Model: "claude-3-opus-20240229",
+		Models: map[string]config.ModelConfig{
+			"claude-3-opus": {Provider: "anthropic", Model: "claude-3-opus-20240229", Type: "anthropic"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
-		router: mockR,
+		cfg:     &config.Config{},
+		manager: mgr,
 	}
 	handler.ValidateRequest([]byte(`{"model":"claude-3-opus","input":"Hello","stream":true}`))
 
@@ -611,19 +564,19 @@ func BenchmarkResponsesHandler_TransformRequest_Anthropic(b *testing.B) {
 
 // TestResponsesHandler_EncryptedReasoning tests extraction of encrypted reasoning in ZDR mode.
 func TestResponsesHandler_EncryptedReasoning(t *testing.T) {
-	mockR := newMockRouter()
-	mockR.models["gpt-4o"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "openai",
-			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com/v1"}},
 		},
-		Model:          "gpt-4o",
-		OutputProtocol: "openai",
+		Models: map[string]config.ModelConfig{
+			"gpt-4o": {Provider: "openai", Model: "gpt-4o", Type: "openai"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
-		router: mockR,
+		cfg:     &config.Config{},
+		manager: mgr,
 	}
 
 	// Test with encrypted reasoning in ZDR mode
@@ -645,19 +598,19 @@ func TestResponsesHandler_EncryptedReasoning(t *testing.T) {
 
 // TestResponsesHandler_NoEncryptedReasoning tests normal mode without encrypted reasoning.
 func TestResponsesHandler_NoEncryptedReasoning(t *testing.T) {
-	mockR := newMockRouter()
-	mockR.models["gpt-4o"] = &router.ResolvedRoute{
-		Provider: config.Provider{
-			Name:      "openai",
-			Endpoints: map[string]string{"openai": "https://api.openai.com/v1"},
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com/v1"}},
 		},
-		Model:          "gpt-4o",
-		OutputProtocol: "openai",
+		Models: map[string]config.ModelConfig{
+			"gpt-4o": {Provider: "openai", Model: "gpt-4o", Type: "openai"},
+		},
 	}
+	mgr := config.NewManager(schema, "")
 
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
-		router: mockR,
+		cfg:     &config.Config{},
+		manager: mgr,
 	}
 
 	// Test without encrypted reasoning

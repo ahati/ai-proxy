@@ -32,8 +32,8 @@ type CompletionsHandler struct {
 	// cfg contains the application configuration including upstream URL and API key.
 	// Must not be nil after construction.
 	cfg *config.Config
-	// router resolves model names to providers. May be nil for legacy behavior.
-	modelRouter router.Router
+	// manager provides thread-safe access to the live configuration.
+	manager *config.ConfigManager
 	// route is the resolved route for the current request.
 	// Set during ValidateRequest for use in subsequent methods.
 	route *router.ResolvedRoute
@@ -44,15 +44,15 @@ type CompletionsHandler struct {
 // NewCompletionsHandler creates a Gin handler for the /v1/chat/completions endpoint.
 //
 // @param cfg - Application configuration. Must not be nil.
-// @param r - Router for model resolution. May be nil for legacy behavior.
+// @param m - ConfigManager for live config access. May be nil for legacy behavior.
 // @return Gin handler function that processes completion requests.
 //
 // @pre cfg != nil
-func NewCompletionsHandler(cfg *config.Config, r router.Router) gin.HandlerFunc {
+func NewCompletionsHandler(cfg *config.Config, m *config.ConfigManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := &CompletionsHandler{
-			cfg:         cfg,
-			modelRouter: r,
+			cfg:    cfg,
+			manager: m,
 		}
 		Handle(h)(c)
 	}
@@ -64,8 +64,9 @@ func NewCompletionsHandler(cfg *config.Config, r router.Router) gin.HandlerFunc 
 // @param body - Raw request body bytes.
 // @return Error if JSON parsing fails or model cannot be resolved.
 func (h *CompletionsHandler) ValidateRequest(body []byte) error {
-	// If no router, use legacy behavior
-	if h.modelRouter == nil {
+	// Create a router from the current config snapshot
+	r := newRouterFromManager(h.manager)
+	if r == nil {
 		return nil
 	}
 
@@ -82,7 +83,7 @@ func (h *CompletionsHandler) ValidateRequest(body []byte) error {
 	}
 
 	// Resolve the model to a route (incoming protocol is OpenAI for completions endpoint)
-	route, err := h.modelRouter.ResolveWithProtocol(req.Model, "openai")
+	route, err := r.ResolveWithProtocol(req.Model, "openai")
 	if err != nil {
 		return nil // Use fallback behavior
 	}

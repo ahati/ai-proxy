@@ -61,9 +61,15 @@ func main() {
 		logging.InfoMsg("SSE capture disabled (use --sse-log-dir to enable)")
 	}
 
+	// Create config manager for thread-safe live config updates
+	var manager *config.ConfigManager
+	if cfg.AppConfig != nil {
+		manager = config.NewManager(cfg.AppConfig, cfg.ConfigFile)
+	}
+
 	// Create server with loaded configuration
 	// Middleware is added first so it applies to all routes
-	server := api.NewServer(cfg, api.NewCaptureMiddleware(storage).Handler())
+	server := api.NewServer(cfg, manager, api.NewCaptureMiddleware(storage).Handler())
 
 	// Build listen address from configured port
 	addr := ":" + cfg.Port
