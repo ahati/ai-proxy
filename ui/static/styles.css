@@ -172,18 +172,17 @@ th { color: var(--text-secondary); font-weight: 500; font-size: 0.8rem; text-tra
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; }
 
 /* Toggle switch */
-.toggle-row {
+label.toggle-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.5rem 0.75rem;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    padding: 0.5rem 0;
     cursor: pointer;
     user-select: none;
+    border-bottom: 1px solid var(--border);
 }
-.toggle-row:hover { border-color: var(--accent); }
+.toggle-row:last-child { border-bottom: none; }
+.toggle-row:hover .toggle-label { color: var(--accent); }
 .toggle-label { font-size: 0.85rem; color: var(--text-primary); flex: 1; min-width: 0; }
 .toggle-row input[type="checkbox"] { display: none; }
 .toggle-switch {
