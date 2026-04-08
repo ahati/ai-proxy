@@ -7,12 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
-	"strings"
 )
-
-// envVarRegex matches ${VAR_NAME} or $VAR_NAME patterns
-var envVarRegex = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)`)
 
 // Loader handles loading and validating configuration from JSON files.
 type Loader struct{}
@@ -60,8 +55,8 @@ func (l *Loader) Load(path string) (*Schema, error) {
 func (l *Loader) resolveEnvVars(s *Schema) {
 	for i := range s.Providers {
 		p := &s.Providers[i]
-		// Expand env vars in apiKey if it contains ${...} pattern
-		p.APIKey = expandEnvVars(p.APIKey)
+		// Don't expand ${VAR} patterns in apiKey - preserve raw syntax for display/editing
+		// Expansion happens dynamically in Provider.GetAPIKey() at runtime
 		// If apiKey is empty and envApiKey is set, get from env
 		if p.APIKey == "" && p.EnvAPIKey != "" {
 			p.APIKey = os.Getenv(p.EnvAPIKey)
@@ -71,33 +66,4 @@ func (l *Loader) resolveEnvVars(s *Schema) {
 	// Expand environment variables in websearch config
 	s.WebSearch.ExaAPIKey = expandEnvVars(s.WebSearch.ExaAPIKey)
 	s.WebSearch.BraveAPIKey = expandEnvVars(s.WebSearch.BraveAPIKey)
-}
-
-// expandEnvVars expands ${VAR_NAME} patterns in a string with the
-// corresponding environment variable values. If the environment
-// variable is not set, the pattern is left unchanged.
-//
-// @param s - the string to expand
-// @return the expanded string
-func expandEnvVars(s string) string {
-	if s == "" {
-		return s
-	}
-	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
-		// Extract variable name from ${VAR} or $VAR format
-		varName := ""
-		if strings.HasPrefix(match, "${") && strings.HasSuffix(match, "}") {
-			varName = match[2 : len(match)-1]
-		} else if strings.HasPrefix(match, "$") {
-			varName = match[1:]
-		}
-		if varName == "" {
-			return match
-		}
-		if value := os.Getenv(varName); value != "" {
-			return value
-		}
-		// If env var not set, return empty string (or could return original match)
-		return ""
-	})
 }

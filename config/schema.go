@@ -4,9 +4,14 @@ package config
 
 import (
 	"os"
+	"regexp"
+	"strings"
 
 	"ai-proxy/types"
 )
+
+// envVarRegex matches ${VAR_NAME} or $VAR_NAME patterns
+var envVarRegex = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)`)
 
 // Provider defines an upstream API provider configuration.
 // A provider represents an external API service that can handle requests.
@@ -31,15 +36,45 @@ type Provider struct {
 }
 
 // GetAPIKey returns the API key for this provider.
-// If APIKey is set directly, it is returned.
+// If APIKey is set directly (may contain ${VAR} syntax), it is expanded and returned.
 // Otherwise, the value is fetched from the environment variable specified by EnvAPIKey.
 //
 // @return string - the resolved API key, or empty string if not configured
 func (p *Provider) GetAPIKey() string {
 	if p.APIKey != "" {
-		return p.APIKey
+		// Expand ${VAR} syntax if present, otherwise return as-is
+		return expandEnvVars(p.APIKey)
 	}
 	return os.Getenv(p.EnvAPIKey)
+}
+
+// expandEnvVars expands ${VAR_NAME} patterns in a string with the
+// corresponding environment variable values. If the environment
+// variable is not set, the pattern is left unchanged.
+//
+// @param s - the string to expand
+// @return the expanded string
+func expandEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
+		// Extract variable name from ${VAR} or $VAR format
+		varName := ""
+		if strings.HasPrefix(match, "${") && strings.HasSuffix(match, "}") {
+			varName = match[2 : len(match)-1]
+		} else if strings.HasPrefix(match, "$") {
+			varName = match[1:]
+		}
+		if varName == "" {
+			return match
+		}
+		if value := os.Getenv(varName); value != "" {
+			return value
+		}
+		// If env var not set, return empty string (or could return original match)
+		return ""
+	})
 }
 
 // GetEndpoint returns the endpoint URL for the specified protocol.

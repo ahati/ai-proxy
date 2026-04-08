@@ -127,6 +127,7 @@ func (s *Server) setupRoutes() {
 		uiAPI := s.router.Group("/ui/api")
 		{
 			uiAPI.GET("/config", cfgHandler.GetConfig)
+			uiAPI.GET("/config/raw", cfgHandler.GetRawConfig)
 			uiAPI.PUT("/config", cfgHandler.UpdateConfig)
 			uiAPI.PATCH("/config/models", cfgHandler.PatchModels)
 			uiAPI.DELETE("/config/models/:name", cfgHandler.DeleteModel)

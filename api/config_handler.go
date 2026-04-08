@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"ai-proxy/config"
@@ -98,6 +100,37 @@ func (h *ConfigHandler) GetConfig(c *gin.Context) {
 		Persisted:  snap.Persisted,
 		ConfigFile: h.manager.ConfigFilePath(),
 	})
+}
+
+// GetRawConfig returns the raw JSON configuration file without any processing.
+// This endpoint reads the config file directly from disk and returns it as-is,
+// preserving all raw values including ${VAR} syntax and unmasked API keys.
+// Used by the UI for editing to show exact configuration as written.
+//
+// GET /ui/api/config/raw
+//
+// @return Raw JSON file content as-is (no masking, no processing).
+func (h *ConfigHandler) GetRawConfig(c *gin.Context) {
+	configFile := h.manager.ConfigFilePath()
+	if configFile == "" {
+		c.JSON(http.StatusInternalServerError, apiResponse{
+			OK:    false,
+			Error: "No config file path configured",
+		})
+		return
+	}
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, apiResponse{
+			OK:    false,
+			Error: fmt.Sprintf("Failed to read config file: %v", err),
+		})
+		return
+	}
+
+	// Return raw JSON directly without any processing
+	c.Data(http.StatusOK, "application/json", data)
 }
 
 // UpdateConfig replaces the entire configuration with the provided schema.
@@ -439,12 +472,17 @@ func maskSchema(s *config.Schema) *config.Schema {
 
 // maskAPIKey masks an API key for safe display.
 // Shows first 4 and last 4 characters, or "***masked***" for short keys.
+// Does NOT mask ${VAR} syntax patterns (these are env var references, not secrets).
 //
 // @param key - API key to mask.
-// @return Masked key string.
+// @return Masked key string, or original if it's an env var reference.
 func maskAPIKey(key string) string {
 	if key == "" {
 		return ""
+	}
+	// Don't mask ${VAR} patterns - these are environment variable references
+	if strings.HasPrefix(key, "${") && strings.HasSuffix(key, "}") {
+		return key
 	}
 	if len(key) <= 8 {
 		return "***masked***"

@@ -27,7 +27,7 @@ async function renderProviders() {
                             ...providers.map(p => h('tr', {},
                                 h('td', {}, p.name),
                                 h('td', {}, Object.keys(p.endpoints || {}).join(', ')),
-                                h('td', {}, p.apiKey || '(env)'),
+                                h('td', {}, formatAPIKeyDisplay(p)),
                                 h('td', {},
                                     h('button', { className: 'btn-secondary btn-sm', style: 'margin-right:0.5rem',
                                         onclick: () => showProviderForm(p) }, 'Edit'),
@@ -50,6 +50,32 @@ function showProviderForm(provider = null) {
     const content = document.getElementById('content');
     const overlay = h('div', { style: 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:50;display:flex;align-items:center;justify-content:center' });
 
+    // For editing, fetch raw config to get exact values as written in JSON
+    if (!isNew && provider) {
+        fetchRawProviderConfig(provider.name).then(rawProvider => {
+            renderProviderForm(overlay, rawProvider, isNew);
+        }).catch(() => {
+            // Fallback to using the provider object from table if raw fetch fails
+            renderProviderForm(overlay, provider, isNew);
+        });
+    } else {
+        renderProviderForm(overlay, null, isNew);
+    }
+
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+}
+
+async function fetchRawProviderConfig(providerName) {
+    const data = await fetchJSON('/config/raw');
+    const provider = data.providers.find(p => p.name === providerName);
+    if (!provider) {
+        throw new Error(`Provider '${providerName}' not found in raw config`);
+    }
+    return provider;
+}
+
+function renderProviderForm(overlay, provider, isNew) {
     const form = h('div', { className: 'card', style: 'width:500px;max-height:90vh;overflow-y:auto' },
         h('h3', { className: 'card-title', style: 'margin-bottom:1rem' }, isNew ? 'Add Provider' : `Edit: ${provider.name}`),
 
@@ -57,21 +83,19 @@ function showProviderForm(provider = null) {
         field('OpenAI Endpoint', 'provider-openai', provider?.endpoints?.openai || '', 'url', 'https://api.example.com/v1/chat/completions'),
         field('Anthropic Endpoint', 'provider-anthropic', provider?.endpoints?.anthropic || '', 'url', 'https://api.anthropic.com/v1/messages'),
         field('Default Protocol', 'provider-default', provider?.default || '', 'text', 'openai (if multiple endpoints)'),
-        field('API Key', 'provider-apikey', '', 'text', isNew ? 'API key or leave blank for env var' : 'Leave blank to keep existing'),
+        field('API Key', 'provider-apikey', provider?.apiKey || '', 'text', 'API key or ${ENV_VAR} syntax'),
         field('Env API Key', 'provider-envkey', provider?.envApiKey || '', 'text', 'ENV_VAR_NAME'),
 
         h('div', { className: 'btn-group', style: 'margin-top:1.5rem' },
-            h('button', { className: 'btn-primary', onclick: () => saveProvider(isNew, provider?.name) }, 'Save'),
+            h('button', { className: 'btn-primary', onclick: () => saveProvider(isNew) }, 'Save'),
             h('button', { className: 'btn-secondary', onclick: () => overlay.remove() }, 'Cancel')
         )
     );
 
     overlay.appendChild(form);
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    document.body.appendChild(overlay);
 }
 
-async function saveProvider(isNew, originalName) {
+async function saveProvider(isNew) {
     const name = document.getElementById('provider-name').value.trim();
     const openai = document.getElementById('provider-openai').value.trim();
     const anthropic = document.getElementById('provider-anthropic').value.trim();
@@ -123,4 +147,15 @@ function field(label, id, value, type = 'text', placeholder = '') {
         h('label', { for: id }, label),
         h('input', { type, id, value, placeholder })
     );
+}
+
+function formatAPIKeyDisplay(provider) {
+    if (provider.apiKey) {
+        // apiKey can be actual key or ${VAR} interpolation
+        return provider.apiKey;
+    }
+    if (provider.envApiKey) {
+        return `(env: ${provider.envApiKey})`;
+    }
+    return '(none)';
 }
