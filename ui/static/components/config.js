@@ -2,17 +2,19 @@
 
 async function renderRawConfig() {
     try {
-        // Fetch both raw config (from disk) and metadata in parallel
-        const [rawText, metadata] = await Promise.all([
-            fetch('/config/raw').then(r => {
-                if (!r.ok) throw new Error(`Failed to load raw config: ${r.statusText}`);
-                return r.text();
-            }),
-            fetchJSON('/config')
-        ]);
+        const resp = await fetch('/ui/api/config/raw');
+        if (!resp.ok) throw new Error('Failed to load raw config: ' + resp.statusText);
+        const rawText = await resp.text();
+
+        // Pretty-print the raw JSON from disk
+        let jsonStr;
+        try {
+            jsonStr = JSON.stringify(JSON.parse(rawText), null, 2);
+        } catch (_) {
+            jsonStr = rawText; // Not valid JSON — show as-is
+        }
 
         const content = document.getElementById('content');
-
         content.innerHTML = '';
         content.appendChild(
             h('div', {},
@@ -23,13 +25,7 @@ async function renderRawConfig() {
                         h('button', { className: 'btn-primary btn-sm', onclick: applyRawConfig }, 'Apply')
                     )
                 ),
-                h('textarea', { className: 'config-editor', id: 'raw-config' }, rawText),
-                h('div', { style: 'margin-top:0.75rem;display:flex;gap:1rem;align-items:center' },
-                    h('span', { style: 'font-size:0.8rem;color:var(--text-secondary)' },
-                        `Loaded: ${new Date(metadata.loadedAt).toLocaleString()}`,
-                        metadata.persisted ? '' : ' (unsaved changes)'
-                    )
-                )
+                h('textarea', { className: 'config-editor', id: 'raw-config' }, jsonStr)
             )
         );
     } catch (err) {
