@@ -66,7 +66,7 @@ type NonStreamingHandler interface {
 func NewCountTokensHandler(cfg *config.Config, m *config.ConfigManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := &CountTokensHandler{
-			cfg:    cfg,
+			cfg:     cfg,
 			manager: m,
 		}
 		HandleNonStreaming(h)(c)

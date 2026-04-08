@@ -9,9 +9,9 @@ import (
 // @brief Tests EventType.String() returns correct names.
 func TestEventType_String(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		eventType EventType
-		want     string
+		want      string
 	}{
 		{"OpenAIChunk", EventOpenAIChunk, "OpenAIChunk"},
 		{"AnthropicEvent", EventAnthropicEvent, "AnthropicEvent"},
@@ -34,28 +34,28 @@ func TestEventType_String(t *testing.T) {
 // @brief Tests PipelineEvent construction and field access.
 func TestPipelineEvent_Type(t *testing.T) {
 	tests := []struct {
-		name    string
-		event   PipelineEvent
+		name     string
+		event    PipelineEvent
 		wantType EventType
 		wantData string
 		wantSSE  string
 	}{
 		{
-			name:    "OpenAIChunk with data",
-			event:   PipelineEvent{Type: EventOpenAIChunk, Data: []byte(`{"id":"chatcmpl-123"}`)},
+			name:     "OpenAIChunk with data",
+			event:    PipelineEvent{Type: EventOpenAIChunk, Data: []byte(`{"id":"chatcmpl-123"}`)},
 			wantType: EventOpenAIChunk,
 			wantData: `{"id":"chatcmpl-123"}`,
 		},
 		{
-			name:    "AnthropicEvent with SSE type",
-			event:   PipelineEvent{Type: EventAnthropicEvent, Data: []byte(`{"type":"message_start"}`), SSEType: "message_start"},
+			name:     "AnthropicEvent with SSE type",
+			event:    PipelineEvent{Type: EventAnthropicEvent, Data: []byte(`{"type":"message_start"}`), SSEType: "message_start"},
 			wantType: EventAnthropicEvent,
 			wantData: `{"type":"message_start"}`,
 			wantSSE:  "message_start",
 		},
 		{
-			name:    "SSE event",
-			event:   PipelineEvent{Type: EventSSE, Data: []byte("hello"), SSEType: "ping"},
+			name:     "SSE event",
+			event:    PipelineEvent{Type: EventSSE, Data: []byte("hello"), SSEType: "ping"},
 			wantType: EventSSE,
 			wantData: "hello",
 			wantSSE:  "ping",

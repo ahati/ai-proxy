@@ -50,10 +50,10 @@ type maskedProvider struct {
 
 // configResponse is the response for GET /ui/api/config.
 type configResponse struct {
-	Schema    *config.Schema `json:"schema"`
-	LoadedAt  time.Time      `json:"loadedAt"`
-	Persisted bool           `json:"persisted"`
-	ConfigFile string        `json:"configFile"`
+	Schema     *config.Schema `json:"schema"`
+	LoadedAt   time.Time      `json:"loadedAt"`
+	Persisted  bool           `json:"persisted"`
+	ConfigFile string         `json:"configFile"`
 }
 
 // statusResponse is the response for GET /ui/api/status.
@@ -402,7 +402,7 @@ func (h *ConfigHandler) ReloadConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, reloadResponse{
-		OK:      true,
+		OK: true,
 		Message: fmt.Sprintf("Config reloaded from %s (%d providers, %d models)",
 			h.manager.ConfigFilePath(), len(schema.Providers), len(schema.Models)),
 	})

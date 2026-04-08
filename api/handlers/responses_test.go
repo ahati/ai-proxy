@@ -68,7 +68,7 @@ func TestResponsesHandler_ValidateRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := &ResponsesHandler{
-				cfg:    &config.Config{},
+				cfg:     &config.Config{},
 				manager: mgr,
 			}
 
@@ -124,7 +124,7 @@ func TestResponsesHandler_ValidateRequest_EncryptedReasoningSize(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler := &ResponsesHandler{
-				cfg:    &config.Config{},
+				cfg:     &config.Config{},
 				manager: mgr,
 			}
 
@@ -293,7 +293,7 @@ func TestResponsesHandler_UpstreamURL(t *testing.T) {
 // TestResponsesHandler_UpstreamURL_NilRoute tests upstream URL with nil route.
 func TestResponsesHandler_UpstreamURL_NilRoute(t *testing.T) {
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
+		cfg:     &config.Config{},
 		manager: nil,
 	}
 
@@ -327,7 +327,7 @@ func TestResponsesHandler_ResolveAPIKey(t *testing.T) {
 // TestResponsesHandler_ResolveAPIKey_NilRoute tests API key with nil route.
 func TestResponsesHandler_ResolveAPIKey_NilRoute(t *testing.T) {
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
+		cfg:     &config.Config{},
 		manager: nil,
 	}
 
@@ -451,7 +451,7 @@ func TestResponsesHandler_CreateTransformer_Anthropic(t *testing.T) {
 // TestResponsesHandler_CreateTransformer_NilRoute tests transformer with nil route.
 func TestResponsesHandler_CreateTransformer_NilRoute(t *testing.T) {
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
+		cfg:     &config.Config{},
 		manager: nil,
 	}
 
@@ -466,7 +466,7 @@ func TestResponsesHandler_CreateTransformer_NilRoute(t *testing.T) {
 // TestResponsesHandler_WriteError tests error writing.
 func TestResponsesHandler_WriteError(t *testing.T) {
 	handler := &ResponsesHandler{
-		cfg:    &config.Config{},
+		cfg:     &config.Config{},
 		manager: nil,
 	}
 

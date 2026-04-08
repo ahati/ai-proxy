@@ -51,7 +51,7 @@ type CompletionsHandler struct {
 func NewCompletionsHandler(cfg *config.Config, m *config.ConfigManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := &CompletionsHandler{
-			cfg:    cfg,
+			cfg:     cfg,
 			manager: m,
 		}
 		Handle(h)(c)

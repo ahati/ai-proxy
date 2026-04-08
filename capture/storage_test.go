@@ -149,7 +149,7 @@ func TestStorage_Write_ValidJSON(t *testing.T) {
 		t.Fatal("file content not found")
 	}
 
-	var parsed logData
+	var parsed LogEntry
 	if err := json.Unmarshal(fileContent, &parsed); err != nil {
 		t.Fatalf("failed to parse JSON: %v", err)
 	}

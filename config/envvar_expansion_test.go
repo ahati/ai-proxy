@@ -31,10 +31,10 @@ func TestProviderGetAPIKey_EnvVarExpansion(t *testing.T) {
 			want:        "",
 		},
 		{
-			name:        "apiKey_without_${}_returned_as_is",
-			apiKey:      "plain-key-value",
-			envAPIKey:   "",
-			want:        "plain-key-value",
+			name:      "apiKey_without_${}_returned_as_is",
+			apiKey:    "plain-key-value",
+			envAPIKey: "",
+			want:      "plain-key-value",
 		},
 		{
 			name:        "apiKey_with_nested_${VAR}",

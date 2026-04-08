@@ -61,8 +61,8 @@ func NewServer(cfg *config.Config, manager *config.ConfigManager, middleware ...
 	}
 
 	s := &Server{
-		router: gin.Default(),
-		config: cfg,
+		router:  gin.Default(),
+		config:  cfg,
 		manager: manager,
 	}
 
@@ -137,6 +137,15 @@ func (s *Server) setupRoutes() {
 			uiAPI.POST("/config/save", cfgHandler.SaveConfig)
 			uiAPI.GET("/status", cfgHandler.GetStatus)
 		}
+
+		// In-memory logs API
+		logsHandler := NewLogsHandler()
+		uiAPI.GET("/logs", logsHandler.List)
+		uiAPI.GET("/logs/:id", logsHandler.Get)
+		uiAPI.POST("/logs/flush", logsHandler.Flush)
+		uiAPI.DELETE("/logs", logsHandler.Clear)
+		uiAPI.GET("/logs/config", logsHandler.GetConfig)
+		uiAPI.PUT("/logs/config", logsHandler.UpdateConfig)
 	}
 
 	// Static UI serving - embed UI files into the binary.

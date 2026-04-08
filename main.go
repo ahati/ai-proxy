@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"ai-proxy/api"
+	"ai-proxy/capture"
 	"ai-proxy/config"
 	"ai-proxy/conversation"
 	"ai-proxy/logging"
@@ -51,6 +52,13 @@ func main() {
 	websearch.DefaultService = websearch.InitDefaultService(cfg.AppConfig.WebSearch)
 	if websearch.DefaultService != nil {
 		logging.InfoMsg("Web search service initialized: backend=%s", websearch.DefaultService.GetBackend())
+	}
+
+	// Initialize in-memory log store
+	{
+		memCfg := cfg.AppConfig.MemoryLogs
+		capture.InitMemoryStore(memCfg.IsEnabled(), memCfg.GetCapacity())
+		logging.InfoMsg("In-memory log store: enabled=%v, capacity=%d", memCfg.IsEnabled(), memCfg.GetCapacity())
 	}
 
 	// Initialize storage for request capture if logging is enabled

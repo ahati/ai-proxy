@@ -210,6 +210,41 @@ type ResponsesConfig struct {
 	MaxContextTokens int `json:"max_context_tokens"`
 }
 
+// MemoryLogsConfig defines the configuration for in-memory request logging.
+// When enabled, the last N captured request/response logs are stored in memory
+// and accessible via the /ui/api/logs API and Logs UI page.
+type MemoryLogsConfig struct {
+	// Enabled determines whether in-memory logging is active.
+	// When nil (omitted from JSON), the feature defaults to enabled.
+	// Set to false to disable at startup; can be toggled at runtime via UI.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Capacity is the maximum number of log entries to retain.
+	// Oldest entries are discarded when the limit is reached.
+	// Default: 2000. Minimum: 10.
+	Capacity int `json:"capacity,omitempty"`
+}
+
+// IsEnabled returns whether in-memory logging is enabled.
+// Returns true (enabled) when Enabled is nil (omitted from config).
+//
+// @return true if in-memory logging should be active
+func (c MemoryLogsConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// GetCapacity returns the configured capacity or the default of 2000.
+//
+// @return the effective capacity for the in-memory log store
+func (c MemoryLogsConfig) GetCapacity() int {
+	if c.Capacity <= 0 {
+		return 2000
+	}
+	return c.Capacity
+}
+
 // Schema is the root configuration structure for the multi-provider proxy.
 // It contains all provider definitions, model mappings, and fallback settings.
 type Schema struct {
@@ -225,4 +260,6 @@ type Schema struct {
 	Responses ResponsesConfig `json:"responses"`
 	// WebSearch defines the web search service configuration.
 	WebSearch types.WebSearchConfig `json:"websearch"`
+	// MemoryLogs defines the in-memory request logging configuration.
+	MemoryLogs MemoryLogsConfig `json:"memoryLogs"`
 }

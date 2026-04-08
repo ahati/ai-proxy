@@ -52,10 +52,24 @@ const routes = {
     '#/models': renderModels,
     '#/fallback': renderFallback,
     '#/config': renderRawConfig,
+    '#/logs': renderLogs,
 };
 
 function navigateToCurrentRoute() {
     const hash = location.hash || '#/status';
+    
+    // Check for logs detail route (#/logs/:id)
+    if (hash.startsWith('#/logs/')) {
+        const requestId = hash.substring(7); // Remove '#/logs/'
+        if (requestId) {
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.toggle('active', link.getAttribute('href') === '#/logs');
+            });
+            renderLogDetail(requestId);
+            return;
+        }
+    }
+    
     const render = routes[hash];
     if (render) {
         // Update active nav link

@@ -75,7 +75,7 @@ type ResponsesHandler struct {
 func NewResponsesHandler(cfg *config.Config, m *config.ConfigManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := &ResponsesHandler{
-			cfg:    cfg,
+			cfg:     cfg,
 			manager: m,
 		}
 		Handle(h)(c)
