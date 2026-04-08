@@ -1,5 +1,10 @@
 // logs.js - In-memory logs viewer component
 
+// Cache for parsed JSON to avoid double-parsing during hydration.
+// Keyed by auto-incremented ID; cleared each time buildSection runs.
+const _jsonTreeCache = new Map();
+let _jsonTreeCacheCounter = 0;
+
 let logState = {
     search: '',
     method: '',
@@ -282,7 +287,6 @@ async function renderLogDetail(requestId) {
     }
 
     const status = getLogStatus(entry);
-    const statusColor = status >= 400 ? 'var(--danger)' : status >= 200 ? 'var(--success)' : 'var(--text-secondary)';
     const statusLabel = status >= 200 && status < 300 ? 'Success' :
                         status >= 300 && status < 400 ? 'Redirect' :
                         status >= 400 && status < 500 ? 'Client Error' :
@@ -410,9 +414,27 @@ function buildSection(title, type, data, hasChunks) {
     // Body (JSON)
     if (data.body) {
         const bodyStr = typeof data.body === 'string' ? data.body : JSON.stringify(data.body, null, 2);
+        let parsed;
+        try { parsed = JSON.parse(bodyStr); } catch (_) { parsed = undefined; }
+
         bodyHtml += '<div class="log-section-part">';
         bodyHtml += '<div class="log-section-part-header">Body <button class="btn-copy" onclick="copyLogData(this)">Copy</button></div>';
-        bodyHtml += '<pre class="log-json-block" data-raw="' + escapeHtml(bodyStr) + '">' + syntaxHighlightJSON(bodyStr) + '</pre>';
+
+        if (parsed !== undefined) {
+            // Store parsed result to avoid re-parsing during hydration
+            const cacheId = '__jt_' + (++_jsonTreeCacheCounter);
+            _jsonTreeCache.set(cacheId, parsed);
+
+            bodyHtml += '<div class="log-json-toolbar">';
+            bodyHtml += '<button class="btn-tree-action" onclick="jsonTreeExpandAll(this)">Expand All</button>';
+            bodyHtml += '<button class="btn-tree-action" onclick="jsonTreeCollapseAll(this)">Collapse All</button>';
+            bodyHtml += '</div>';
+            bodyHtml += '<div class="log-json-tree-root" data-tree-cache="' + cacheId + '" data-raw="' + escapeHtml(bodyStr) + '"></div>';
+        } else {
+            // Fallback: non-JSON content renders as plain pre block
+            bodyHtml += '<pre class="log-json-block" data-raw="' + escapeHtml(bodyStr) + '">' + escapeHtml(bodyStr) + '</pre>';
+        }
+
         bodyHtml += '</div>';
     }
 
@@ -444,6 +466,22 @@ function buildSection(title, type, data, hasChunks) {
     }
 
     body.innerHTML = bodyHtml;
+
+    // Hydrate JSON tree placeholders into interactive collapsible trees
+    body.querySelectorAll('.log-json-tree-root').forEach(root => {
+        const cacheId = root.getAttribute('data-tree-cache');
+        const parsed = cacheId ? _jsonTreeCache.get(cacheId) : undefined;
+        if (parsed === undefined) return;
+
+        // Collapse root by default if it has many keys/items
+        const collapsed = (isObject(parsed) && Object.keys(parsed).length > 5) ||
+                          (Array.isArray(parsed) && parsed.length > 5);
+        root.replaceChildren(renderJSONTree(parsed, null, !collapsed));
+
+        // Free cached value
+        if (cacheId) _jsonTreeCache.delete(cacheId);
+    });
+
     section.appendChild(header);
     section.appendChild(body);
     return section;
@@ -477,15 +515,189 @@ function syntaxHighlightJSON(str) {
 }
 
 function copyLogData(btn) {
-    const pre = btn.parentElement.nextElementSibling;
-    if (!pre) return;
-    const raw = pre.getAttribute('data-raw') || pre.textContent;
+    const container = btn.parentElement.nextElementSibling;
+    if (!container) return;
+    // Support both old <pre> blocks and new JSON tree roots
+    const raw = container.getAttribute('data-raw') || container.textContent;
     navigator.clipboard.writeText(raw).then(() => {
         btn.textContent = 'Copied!';
         setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
     }).catch(() => {
         showToast('Failed to copy', 'error');
     });
+}
+
+// ==================== JSON Tree Renderer ====================
+
+/**
+ * Checks if a value is a plain object (not array, not null).
+ * @param {*} val - Value to check.
+ * @return {boolean} True if val is a plain object.
+ */
+function isObject(val) {
+    return val !== null && typeof val === 'object' && !Array.isArray(val);
+}
+
+/**
+ * Renders a parsed JSON value as an interactive, collapsible DOM tree.
+ * Objects and arrays become toggleable nodes; leaf values render inline with colors.
+ *
+ * @param {*} value - The parsed JSON value to render.
+ * @param {string|null} keyName - Optional key name for this node (e.g., "model", "[0]").
+ * @param {boolean} expanded - Whether to start expanded (true) or collapsed (false).
+ * @return {HTMLElement} A DOM element representing the tree node.
+ */
+function renderJSONTree(value, keyName, expanded) {
+    const node = document.createElement('div');
+    node.className = 'json-tree-node';
+
+    if (isObject(value) || Array.isArray(value)) {
+        // Shared branch for both objects and arrays
+        const isArr = Array.isArray(value);
+        const entries = isArr
+            ? value.map((v, i) => ['[' + i + ']', v])
+            : Object.entries(value);
+        const count = entries.length;
+        const label = isArr ? count + ' item' + (count !== 1 ? 's' : '') : count + ' key' + (count !== 1 ? 's' : '');
+        const bracket = isArr ? ['[', ']'] : ['{', '}'];
+
+        const children = document.createElement('div');
+        children.className = 'json-tree-children';
+        if (!expanded) children.classList.add('json-tree-collapsed');
+
+        const row = document.createElement('span');
+        row.className = 'json-tree-row';
+
+        if (keyName !== null) {
+            row.appendChild(jsonTreeKeyEl(keyName));
+            row.appendChild(jsonTreeSepEl());
+        }
+
+        const toggle = document.createElement('span');
+        toggle.className = 'json-tree-toggle';
+        toggle.textContent = expanded ? '\u25BC' : '\u25B6';
+        row.appendChild(toggle);
+
+        const preview = document.createElement('span');
+        preview.className = 'json-tree-preview';
+        preview.textContent = ' ' + bracket[0] + label + bracket[1];
+        if (expanded) preview.classList.add('json-tree-collapsed');
+        row.appendChild(preview);
+
+        // Toggle click handler
+        row.style.cursor = 'pointer';
+        row.addEventListener('click', () => {
+            const isOpen = !children.classList.contains('json-tree-collapsed');
+            children.classList.toggle('json-tree-collapsed', isOpen);
+            toggle.textContent = isOpen ? '\u25B6' : '\u25BC';
+            preview.classList.toggle('json-tree-collapsed', !isOpen);
+        });
+
+        // Render children
+        for (const [k, v] of entries) {
+            children.appendChild(renderJSONTree(v, k, false));
+        }
+
+        node.appendChild(row);
+        node.appendChild(children);
+
+    } else {
+        // Leaf value — render inline
+        const row = document.createElement('span');
+        row.className = 'json-tree-row';
+
+        if (keyName !== null) {
+            row.appendChild(jsonTreeKeyEl(keyName));
+            row.appendChild(jsonTreeSepEl());
+        }
+
+        row.appendChild(jsonTreeValueEl(value));
+        node.appendChild(row);
+    }
+
+    return node;
+}
+
+/**
+ * Creates a styled key element for the JSON tree.
+ * @param {string} key - The key name.
+ * @return {HTMLElement} Styled key span.
+ */
+function jsonTreeKeyEl(key) {
+    const el = document.createElement('span');
+    el.className = 'json-tree-key';
+    el.textContent = key;
+    return el;
+}
+
+/**
+ * Creates a separator element for the JSON tree.
+ * @return {HTMLElement} Separator span.
+ */
+function jsonTreeSepEl() {
+    const el = document.createElement('span');
+    el.className = 'json-tree-separator';
+    el.textContent = ': ';
+    return el;
+}
+
+/**
+ * Creates a styled value element for the JSON tree based on value type.
+ * Strings are truncated to 300 chars with the full value in a tooltip.
+ * @param {*} value - The value to render.
+ * @return {HTMLElement} Styled value span.
+ */
+function jsonTreeValueEl(value) {
+    const el = document.createElement('span');
+    if (typeof value === 'string') {
+        el.className = 'json-tree-value json-tree-string';
+        const MAX_LEN = 300;
+        if (value.length > MAX_LEN) {
+            el.textContent = '"' + value.substring(0, MAX_LEN) + '..."';
+            el.title = value;
+        } else {
+            el.textContent = '"' + value + '"';
+        }
+    } else if (typeof value === 'number') {
+        el.className = 'json-tree-value json-tree-number';
+        el.textContent = String(value);
+    } else if (typeof value === 'boolean') {
+        el.className = 'json-tree-value json-tree-bool';
+        el.textContent = String(value);
+    } else if (value === null) {
+        el.className = 'json-tree-value json-tree-null';
+        el.textContent = 'null';
+    } else {
+        el.className = 'json-tree-value';
+        el.textContent = String(value);
+    }
+    return el;
+}
+
+/**
+ * Expands all collapsible nodes in the JSON tree.
+ * Bound to the "Expand All" toolbar button.
+ * @param {HTMLElement} btn - The clicked button element.
+ */
+function jsonTreeExpandAll(btn) {
+    const treeRoot = btn.closest('.log-section-part').querySelector('.log-json-tree-root');
+    if (!treeRoot) return;
+    treeRoot.querySelectorAll('.json-tree-children').forEach(c => { c.classList.remove('json-tree-collapsed'); });
+    treeRoot.querySelectorAll('.json-tree-toggle').forEach(t => { t.textContent = '\u25BC'; });
+    treeRoot.querySelectorAll('.json-tree-preview').forEach(p => { p.classList.add('json-tree-collapsed'); });
+}
+
+/**
+ * Collapses all collapsible nodes in the JSON tree.
+ * Bound to the "Collapse All" toolbar button.
+ * @param {HTMLElement} btn - The clicked button element.
+ */
+function jsonTreeCollapseAll(btn) {
+    const treeRoot = btn.closest('.log-section-part').querySelector('.log-json-tree-root');
+    if (!treeRoot) return;
+    treeRoot.querySelectorAll('.json-tree-children').forEach(c => { c.classList.add('json-tree-collapsed'); });
+    treeRoot.querySelectorAll('.json-tree-toggle').forEach(t => { t.textContent = '\u25B6'; });
+    treeRoot.querySelectorAll('.json-tree-preview').forEach(p => { p.classList.remove('json-tree-collapsed'); });
 }
 
 // ==================== Flush Modal ====================

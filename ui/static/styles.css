@@ -622,3 +622,71 @@ label.toggle-row {
     gap: 0.5rem;
     margin-top: 1rem;
 }
+
+/* JSON tree viewer */
+.log-json-tree-root {
+    padding: 0.5rem 1rem;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.75rem;
+    line-height: 1.6;
+    background: var(--bg-primary);
+    max-height: 600px;
+    overflow-y: auto;
+}
+.json-tree-node {
+    padding-left: 1.2em;
+}
+.json-tree-row {
+    display: inline;
+}
+.json-tree-toggle {
+    cursor: pointer;
+    color: var(--text-secondary);
+    display: inline-block;
+    width: 1em;
+    user-select: none;
+    font-size: 0.65rem;
+}
+.json-tree-toggle:hover {
+    color: var(--accent);
+}
+.json-tree-preview {
+    color: var(--text-secondary);
+    font-style: italic;
+    font-size: 0.7rem;
+}
+.json-tree-collapsed {
+    display: none;
+}
+.json-tree-separator {
+    color: var(--text-secondary);
+}
+.json-tree-key { color: #82aaff; }
+.json-tree-string { color: #c3e88d; }
+.json-tree-number { color: #f78c6c; }
+.json-tree-bool { color: #ffcb6b; }
+.json-tree-null { color: #ffcb6b; font-style: italic; }
+.json-tree-value {
+    /* base value style */
+}
+.log-json-toolbar {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.4rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, 0.05);
+}
+.btn-tree-action {
+    padding: 0.15rem 0.5rem;
+    font-size: 0.65rem;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: inherit;
+}
+.btn-tree-action:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
