@@ -2,9 +2,16 @@
 
 async function renderRawConfig() {
     try {
-        const data = await fetchJSON('/config');
+        // Fetch both raw config (from disk) and metadata in parallel
+        const [rawText, metadata] = await Promise.all([
+            fetch('/config/raw').then(r => {
+                if (!r.ok) throw new Error(`Failed to load raw config: ${r.statusText}`);
+                return r.text();
+            }),
+            fetchJSON('/config')
+        ]);
+
         const content = document.getElementById('content');
-        const jsonStr = JSON.stringify(data.schema, null, 2);
 
         content.innerHTML = '';
         content.appendChild(
@@ -16,11 +23,11 @@ async function renderRawConfig() {
                         h('button', { className: 'btn-primary btn-sm', onclick: applyRawConfig }, 'Apply')
                     )
                 ),
-                h('textarea', { className: 'config-editor', id: 'raw-config' }, jsonStr),
+                h('textarea', { className: 'config-editor', id: 'raw-config' }, rawText),
                 h('div', { style: 'margin-top:0.75rem;display:flex;gap:1rem;align-items:center' },
                     h('span', { style: 'font-size:0.8rem;color:var(--text-secondary)' },
-                        `Loaded: ${new Date(data.loadedAt).toLocaleString()}`,
-                        data.persisted ? '' : ' (unsaved changes)'
+                        `Loaded: ${new Date(metadata.loadedAt).toLocaleString()}`,
+                        metadata.persisted ? '' : ' (unsaved changes)'
                     )
                 )
             )
