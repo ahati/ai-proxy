@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 
+	"ai-proxy/config"
+	"ai-proxy/router"
 	"ai-proxy/transform"
 
 	"github.com/gin-gonic/gin"
@@ -110,4 +112,26 @@ type Handler interface {
 	//
 	// @note Used for logging and debugging purposes.
 	ModelInfo() (downstreamModel string, upstreamModel string)
+}
+
+// newRouterFromManager creates a router.Router from the current config manager snapshot.
+// Returns nil if the manager is nil or the snapshot has no schema.
+// This is used by handlers to get a fresh router for each request,
+// ensuring they always use the latest configuration.
+//
+// @param m - Configuration manager. May be nil.
+// @return A Router instance, or nil if config is unavailable.
+func newRouterFromManager(m *config.ConfigManager) router.Router {
+	if m == nil {
+		return nil
+	}
+	snap := m.Get()
+	if snap == nil || snap.Schema == nil {
+		return nil
+	}
+	r, err := router.NewRouter(snap.Schema)
+	if err != nil {
+		return nil
+	}
+	return r
 }

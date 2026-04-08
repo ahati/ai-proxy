@@ -107,7 +107,7 @@ func (s *Storage) Write(recorder *Recorder) error {
 	}
 
 	// Serialize recorder data to JSON-compatible struct
-	logData := s.serialize(data)
+	entry := s.serialize(data)
 
 	// Create file with O_EXCL to atomically prevent overwrites
 	// This is a safety measure in case the Stat check above raced
@@ -124,7 +124,7 @@ func (s *Storage) Write(recorder *Recorder) error {
 	// Indentation makes logs human-readable for debugging
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(logData); err != nil {
+	if err := encoder.Encode(entry); err != nil {
 		logging.ErrorMsg("Failed to encode log data: %v", err)
 		return fmt.Errorf("encode log data: %w", err)
 	}
@@ -220,76 +220,22 @@ func sanitizeFilename(name string) string {
 	return replacer.Replace(name)
 }
 
-// logData is the JSON-serializable representation of a captured request.
-// It includes all request data plus computed duration for analysis.
-//
-// Thread Safety: Value type; safe for concurrent read after creation.
-type logData struct {
-	// RequestID is the unique identifier for this request.
-	// May be empty if ID extraction failed.
-	// Valid values: any string, typically alphanumeric with dashes.
-	RequestID string `json:"request_id"`
-
-	// StartedAt is when the request was initiated.
-	// Used for timeline analysis.
-	// Valid values: any valid time.Time, serialized to RFC3339.
-	StartedAt time.Time `json:"started_at"`
-
-	// DurationMS is the total request duration in milliseconds.
-	// Computed at serialization time.
-	// Valid values: non-negative integer, 0 for very fast requests.
-	DurationMS int64 `json:"duration_ms,omitempty"`
-
-	// Method is the HTTP method of the request.
-	// Valid values: standard HTTP methods (GET, POST, etc.).
-	Method string `json:"method"`
-
-	// Path is the URL path of the request.
-	// Valid values: any valid URL path string.
-	Path string `json:"path"`
-
-	// ClientIP is the remote address of the client.
-	// May include port number.
-	// Valid values: IP:port format string.
-	ClientIP string `json:"client_ip,omitempty"`
-
-	// DownstreamRequest is the captured client request.
-	// Nil if not captured.
-	// Valid values: pointer to HTTPRequestCapture, or nil.
-	DownstreamRequest *HTTPRequestCapture `json:"downstream_request,omitempty"`
-
-	// UpstreamRequest is the captured upstream API request.
-	// Nil if not captured.
-	// Valid values: pointer to HTTPRequestCapture, or nil.
-	UpstreamRequest *HTTPRequestCapture `json:"upstream_request,omitempty"`
-
-	// UpstreamResponse is the captured upstream API response.
-	// Nil if not captured.
-	// Valid values: pointer to SSEResponseCapture, or nil.
-	UpstreamResponse *SSEResponseCapture `json:"upstream_response,omitempty"`
-
-	// DownstreamResponse is the captured response sent to client.
-	// Nil if not captured.
-	// Valid values: pointer to SSEResponseCapture, or nil.
-	DownstreamResponse *SSEResponseCapture `json:"downstream_response,omitempty"`
-}
-
-// serialize converts a RequestRecorder to a logData struct for JSON encoding.
+// serialize converts a RequestRecorder to a LogEntry struct for JSON encoding.
 // Duration is computed from StartedAt to current time.
 //
 // @param r - RequestRecorder to serialize. Must not be nil.
-// @return logData struct ready for JSON encoding.
+// @return LogEntry struct ready for JSON encoding.
 //
 // @pre s != nil && r != nil
-// @post Returned logData contains all fields from r
+// @post Returned LogEntry contains all fields from r
 // @post DurationMS is computed from r.StartedAt
 //
 // @note Thread-safe: pure function with no side effects (time.Since is concurrency-safe).
 // @note Duration is computed at call time, not at request end.
-func (s *Storage) serialize(r *RequestRecorder) logData {
+func (s *Storage) serialize(r *RequestRecorder) LogEntry {
 	// Duration is computed at serialization time
 	// This provides the total request duration for debugging
-	return logData{
+	return LogEntry{
 		RequestID:          r.RequestID,
 		StartedAt:          r.StartedAt,
 		DurationMS:         time.Since(r.StartedAt).Milliseconds(),

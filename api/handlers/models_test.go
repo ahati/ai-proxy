@@ -12,13 +12,11 @@ import (
 )
 
 func TestModelsHandler_Handle_NoConfig(t *testing.T) {
-	cfg := &config.Config{}
-
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 
-	h := &ModelsHandler{cfg: cfg}
+	h := &ModelsHandler{manager: nil}
 	h.Handle(c)
 
 	if w.Code != http.StatusInternalServerError {
@@ -47,7 +45,8 @@ func TestModelsHandler_Handle_Success(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 
-	h := &ModelsHandler{cfg: cfg}
+	mgr := config.NewManager(cfg.AppConfig, "")
+	h := &ModelsHandler{manager: mgr}
 	h.Handle(c)
 
 	if w.Code != http.StatusOK {
@@ -104,7 +103,8 @@ func TestModelsHandler_Handle_EmptyModels(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 
-	h := &ModelsHandler{cfg: cfg}
+	mgr := config.NewManager(cfg.AppConfig, "")
+	h := &ModelsHandler{manager: mgr}
 	h.Handle(c)
 
 	if w.Code != http.StatusOK {

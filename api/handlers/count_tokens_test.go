@@ -471,8 +471,8 @@ func TestCountTokensHandler_UpstreamURL_WithRouter(t *testing.T) {
 				},
 			}
 			cfg := &config.Config{AppConfig: schema}
-			r, _ := router.NewRouter(schema)
-			h := &CountTokensHandler{cfg: cfg, modelRouter: r}
+			mgr := config.NewManager(schema, "")
+			h := &CountTokensHandler{cfg: cfg, manager: mgr}
 
 			body := fmt.Sprintf(`{"model": "%s", "messages": [{"role": "user", "content": "hi"}]}`, tt.modelInBody)
 			_ = h.ValidateRequest([]byte(body))
@@ -498,8 +498,8 @@ func TestCountTokensHandler_ResolveAPIKey_WithRouter(t *testing.T) {
 		},
 	}
 	cfg := &config.Config{AppConfig: schema}
-	r, _ := router.NewRouter(schema)
-	h := &CountTokensHandler{cfg: cfg, modelRouter: r}
+	mgr := config.NewManager(schema, "")
+	h := &CountTokensHandler{cfg: cfg, manager: mgr}
 
 	body := `{"model": "glm-5", "messages": [{"role": "user", "content": "hi"}]}`
 	_ = h.ValidateRequest([]byte(body))
@@ -524,8 +524,8 @@ func TestHandleNonStreaming_FallbackToLocalTokenCount(t *testing.T) {
 		},
 	}
 	cfg := &config.Config{AppConfig: schema}
-	r, _ := router.NewRouter(schema)
-	handler := NewCountTokensHandler(cfg, r)
+	mgr := config.NewManager(schema, "")
+	handler := NewCountTokensHandler(cfg, mgr)
 
 	reqBody := types.MessageCountTokensRequest{
 		Model:    "test-model",

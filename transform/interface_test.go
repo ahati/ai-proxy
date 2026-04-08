@@ -9,12 +9,12 @@ import (
 )
 
 type mockSSETransformer struct {
-	transformErr   error
-	flushErr       error
-	closeErr       error
-	initializeErr  error
-	events         []*sse.Event
-	initialized    bool
+	transformErr  error
+	flushErr      error
+	closeErr      error
+	initializeErr error
+	events        []*sse.Event
+	initialized   bool
 }
 
 func (m *mockSSETransformer) Initialize() error {

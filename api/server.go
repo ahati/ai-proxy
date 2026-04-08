@@ -4,9 +4,13 @@
 package api
 
 import (
+	"io/fs"
+	"net/http"
+
 	"ai-proxy/api/handlers"
 	"ai-proxy/config"
 	"ai-proxy/router"
+	"ai-proxy/ui"
 
 	"github.com/gin-gonic/gin"
 )
@@ -29,9 +33,9 @@ type Server struct {
 	// API keys, and other runtime settings. Must not be nil after initialization.
 	config *config.Config
 
-	// modelRouter resolves model names to providers.
-	// May be nil if no config file was loaded.
-	modelRouter router.Router
+	// manager holds the thread-safe configuration manager for live config updates.
+	// Replaces the previous modelRouter field with atomic config swap support.
+	manager *config.ConfigManager
 }
 
 // NewServer creates and initializes a new Server instance with the given configuration.
@@ -41,6 +45,7 @@ type Server struct {
 //
 //	Must not be nil. Caller retains ownership.
 //
+// @param manager - Configuration manager for thread-safe config access. May be nil.
 // @param middleware - Optional middleware functions to apply before route handlers.
 //
 // @return Pointer to newly allocated Server instance. Never returns nil.
@@ -48,7 +53,7 @@ type Server struct {
 // @pre cfg != nil
 // @post Returned Server has all routes registered and is ready to accept connections.
 // @post Gin is set to ReleaseMode if cfg.Port is non-empty (production mode).
-func NewServer(cfg *config.Config, middleware ...gin.HandlerFunc) *Server {
+func NewServer(cfg *config.Config, manager *config.ConfigManager, middleware ...gin.HandlerFunc) *Server {
 	// Set Gin to release mode for production when port is configured
 	// to reduce console noise and improve performance
 	if cfg.Port != "" {
@@ -56,15 +61,9 @@ func NewServer(cfg *config.Config, middleware ...gin.HandlerFunc) *Server {
 	}
 
 	s := &Server{
-		router: gin.Default(),
-		config: cfg,
-	}
-
-	// Create model router if config is loaded
-	if cfg.AppConfig != nil {
-		if r, err := router.NewRouter(cfg.AppConfig); err == nil {
-			s.modelRouter = r
-		}
+		router:  gin.Default(),
+		config:  cfg,
+		manager: manager,
 	}
 
 	// Apply middleware first so it runs before routes
@@ -91,26 +90,29 @@ func (s *Server) setupRoutes() {
 
 	// Models endpoint - returns list of available models from upstream API
 	// Supports OpenAI-compatible response format.
-	s.router.GET("/v1/models", handlers.NewModelsHandler(s.config))
+	s.router.GET("/v1/models", handlers.NewModelsHandler(s.manager))
 
 	// Chat completions endpoint - unified OpenAI Chat format endpoint
 	// Routes to the appropriate provider based on model configuration.
 	// Supports OpenAI and Anthropic providers with automatic format conversion.
-	s.router.POST("/v1/chat/completions", handlers.NewCompletionsHandler(s.config, s.modelRouter))
+	s.router.POST("/v1/chat/completions", handlers.NewCompletionsHandler(s.config, s.manager))
 
 	// Messages endpoint - unified Anthropic Messages format endpoint
 	// Routes to the appropriate provider based on model configuration.
 	// Supports Anthropic and OpenAI providers with automatic format conversion.
-	s.router.POST("/v1/messages", handlers.NewMessagesHandler(s.config, s.modelRouter))
+	s.router.POST("/v1/messages", handlers.NewMessagesHandler(s.config, s.manager))
 
 	// Messages count tokens endpoint - Anthropic API format endpoint
 	// for counting tokens in messages before sending to upstream.
-	s.router.POST("/v1/messages/count_tokens", handlers.NewCountTokensHandler(s.config, s.modelRouter))
+	s.router.POST("/v1/messages/count_tokens", handlers.NewCountTokensHandler(s.config, s.manager))
 
 	// Responses endpoint - unified OpenAI Responses API endpoint that routes to the
 	// appropriate provider based on model configuration.
-	if s.modelRouter != nil {
-		s.router.POST("/v1/responses", handlers.NewResponsesHandler(s.config, s.modelRouter))
+	if s.manager != nil {
+		snap := s.manager.Get()
+		if snap != nil && snap.Schema != nil {
+			s.router.POST("/v1/responses", handlers.NewResponsesHandler(s.config, s.manager))
+		}
 	}
 
 	// Responses CRUD endpoints - for managing stored conversations
@@ -118,6 +120,71 @@ func (s *Server) setupRoutes() {
 	s.router.DELETE("/v1/responses/:id", handlers.NewResponseDeleteHandler())
 	s.router.GET("/v1/responses/:id/input_items", handlers.NewResponseInputItemsHandler())
 	s.router.POST("/v1/responses/:id/cancel", handlers.NewResponseCancelHandler())
+
+	// Configuration management API
+	if s.manager != nil {
+		cfgHandler := NewConfigHandler(s.manager)
+		uiAPI := s.router.Group("/ui/api")
+		{
+			uiAPI.GET("/config", cfgHandler.GetConfig)
+			uiAPI.GET("/config/raw", cfgHandler.GetRawConfig)
+			uiAPI.PUT("/config", cfgHandler.UpdateConfig)
+			uiAPI.PATCH("/config/models", cfgHandler.PatchModels)
+			uiAPI.DELETE("/config/models/:name", cfgHandler.DeleteModel)
+			uiAPI.PATCH("/config/providers", cfgHandler.PatchProviders)
+			uiAPI.DELETE("/config/providers/:name", cfgHandler.DeleteProvider)
+			uiAPI.POST("/config/reload", cfgHandler.ReloadConfig)
+			uiAPI.POST("/config/save", cfgHandler.SaveConfig)
+			uiAPI.GET("/status", cfgHandler.GetStatus)
+
+			// Web search service reload
+			wsHandler := NewWebSearchHandler(s.manager)
+			uiAPI.POST("/config/websearch/reload", wsHandler.ReloadService)
+		}
+
+		// In-memory logs API
+		logsHandler := NewLogsHandler()
+		uiAPI.GET("/logs", logsHandler.List)
+		uiAPI.GET("/logs/:id", logsHandler.Get)
+		uiAPI.POST("/logs/flush", logsHandler.Flush)
+		uiAPI.DELETE("/logs", logsHandler.Clear)
+		uiAPI.GET("/logs/config", logsHandler.GetConfig)
+		uiAPI.PUT("/logs/config", logsHandler.UpdateConfig)
+	}
+
+	// Static UI serving - embed UI files into the binary.
+	// fs.Sub strips the "static/" prefix so Gin can serve files at the correct paths.
+	staticFS, _ := fs.Sub(ui.StaticFS, "static")
+	s.router.StaticFS("/ui/static", http.FS(staticFS))
+
+	// Convenience redirects to the default UI
+	s.router.GET("/ui", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/ui/static/")
+	})
+	s.router.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/ui/static/")
+	})
+}
+
+// newRouterFromSnapshot creates a router.Router from the current config snapshot.
+// Returns nil if the manager is nil or the snapshot has no schema.
+// This helper avoids import cycle issues by keeping router creation in the api package.
+//
+// @param m - Configuration manager. May be nil.
+// @return A Router instance, or nil if config is unavailable.
+func newRouterFromSnapshot(m *config.ConfigManager) router.Router {
+	if m == nil {
+		return nil
+	}
+	snap := m.Get()
+	if snap == nil || snap.Schema == nil {
+		return nil
+	}
+	r, err := router.NewRouter(snap.Schema)
+	if err != nil {
+		return nil
+	}
+	return r
 }
 
 // Use adds middleware to the server's router chain.

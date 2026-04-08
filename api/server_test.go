@@ -63,7 +63,11 @@ func TestNewServer(t *testing.T) {
 				gin.SetMode(gin.DebugMode)
 			}
 
-			server := NewServer(tt.config)
+			var manager *config.ConfigManager
+			if tt.config.AppConfig != nil {
+				manager = config.NewManager(tt.config.AppConfig, "")
+			}
+			server := NewServer(tt.config, manager)
 
 			if server == nil {
 				t.Fatal("NewServer returned nil")
@@ -85,7 +89,7 @@ func TestServer_setupRoutes(t *testing.T) {
 		Port: "",
 	}
 
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	routes := server.router.Routes()
 
@@ -116,11 +120,11 @@ func TestServer_setupRoutes(t *testing.T) {
 
 func TestServer_setupRoutes_RouteCount(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	routes := server.router.Routes()
 
-	// Routes when modelRouter is nil:
+	// Routes when manager is nil:
 	// GET /health
 	// GET /v1/models
 	// POST /v1/chat/completions
@@ -130,16 +134,20 @@ func TestServer_setupRoutes_RouteCount(t *testing.T) {
 	// DELETE /v1/responses/:id
 	// GET /v1/responses/:id/input_items
 	// POST /v1/responses/:id/cancel
-	// Note: POST /v1/responses is only added when modelRouter is not nil
-	expectedCount := 9
+	// Note: POST /v1/responses and /ui/api/* routes only added when manager is not nil
+	// Static UI routes: GET+HEAD /ui/static/*filepath, GET /ui, GET /
+	expectedCount := 13
 	if len(routes) != expectedCount {
 		t.Errorf("expected %d routes, got %d", expectedCount, len(routes))
+		for _, r := range routes {
+			t.Logf("  %s %s", r.Method, r.Path)
+		}
 	}
 }
 
 func TestServer_Routes_HealthCheck(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
@@ -152,7 +160,7 @@ func TestServer_Routes_HealthCheck(t *testing.T) {
 
 func TestServer_Routes_Models(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -175,7 +183,8 @@ func TestServer_Routes_Models_WithAPIKey(t *testing.T) {
 			},
 		},
 	}
-	server := NewServer(cfg)
+	manager := config.NewManager(cfg.AppConfig, "")
+	server := NewServer(cfg, manager)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
@@ -189,7 +198,7 @@ func TestServer_Routes_Models_WithAPIKey(t *testing.T) {
 
 func TestServer_Routes_Completions_InvalidMethod(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil)
@@ -202,7 +211,7 @@ func TestServer_Routes_Completions_InvalidMethod(t *testing.T) {
 
 func TestServer_Routes_Messages_InvalidMethod(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/messages", nil)
@@ -215,7 +224,7 @@ func TestServer_Routes_Messages_InvalidMethod(t *testing.T) {
 
 func TestServer_Routes_Bridge_InvalidMethod(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/openai-to-anthropic/messages", nil)
@@ -228,7 +237,7 @@ func TestServer_Routes_Bridge_InvalidMethod(t *testing.T) {
 
 func TestServer_Routes_UnknownPath(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/unknown", nil)
@@ -246,12 +255,12 @@ func TestServer_NilConfig(t *testing.T) {
 		}
 	}()
 
-	NewServer(nil)
+	NewServer(nil, nil)
 }
 
 func TestServer_Run_InvalidAddress(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	err := server.Run(":-1")
 	if err == nil {
@@ -261,7 +270,7 @@ func TestServer_Run_InvalidAddress(t *testing.T) {
 
 func TestServer_Run_ValidAddress(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	go func() {
 		_ = server.Run(":0")
@@ -290,7 +299,8 @@ func TestNewServer_SetsConfigCorrectly(t *testing.T) {
 		Port: "8080",
 	}
 
-	server := NewServer(cfg)
+	manager := config.NewManager(cfg.AppConfig, "")
+	server := NewServer(cfg, manager)
 
 	if server.config.AppConfig == nil {
 		t.Error("expected AppConfig to be set")
@@ -307,7 +317,7 @@ func TestNewServer_SetsConfigCorrectly(t *testing.T) {
 
 func TestServer_RouterNotNil(t *testing.T) {
 	cfg := &config.Config{}
-	server := NewServer(cfg)
+	server := NewServer(cfg, nil)
 
 	if server.router == nil {
 		t.Error("router should not be nil")

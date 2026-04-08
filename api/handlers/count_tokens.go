@@ -28,7 +28,7 @@ import (
 // @note This is a non-streaming endpoint that returns a single JSON response.
 type CountTokensHandler struct {
 	cfg           *config.Config
-	modelRouter   router.Router
+	manager       *config.ConfigManager
 	route         *router.ResolvedRoute
 	originalModel string
 }
@@ -58,15 +58,16 @@ type NonStreamingHandler interface {
 // NewCountTokensHandler creates a Gin handler for the /v1/messages/count_tokens endpoint.
 //
 // @param cfg - Application configuration. Must not be nil.
+// @param m - ConfigManager for live config access. May be nil.
 // @return Gin handler function that processes count_tokens requests.
 //
 // @pre cfg != nil
 // @pre cfg.AnthropicUpstreamURL != ""
-func NewCountTokensHandler(cfg *config.Config, r router.Router) gin.HandlerFunc {
+func NewCountTokensHandler(cfg *config.Config, m *config.ConfigManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := &CountTokensHandler{
-			cfg:         cfg,
-			modelRouter: r,
+			cfg:     cfg,
+			manager: m,
 		}
 		HandleNonStreaming(h)(c)
 	}
@@ -100,8 +101,9 @@ func (h *CountTokensHandler) ValidateRequest(body []byte) error {
 		}
 	}
 
-	if h.modelRouter != nil {
-		route, err := h.modelRouter.ResolveWithProtocol(req.Model, "anthropic")
+	modelRouter := newRouterFromManager(h.manager)
+	if modelRouter != nil {
+		route, err := modelRouter.ResolveWithProtocol(req.Model, "anthropic")
 		if err == nil {
 			h.route = route
 			h.originalModel = req.Model

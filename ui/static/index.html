@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Proxy Manager</title>
+    <link rel="stylesheet" href="/ui/static/styles.css">
+</head>
+<body>
+    <div id="app">
+        <aside id="sidebar">
+            <h1 class="logo">AI Proxy</h1>
+            <nav>
+                <a href="#/status" class="nav-link" data-route="status">Status</a>
+                <a href="#/providers" class="nav-link" data-route="providers">Providers</a>
+                <a href="#/models" class="nav-link" data-route="models">Models</a>
+                <a href="#/fallback" class="nav-link" data-route="fallback">Fallback</a>
+                <a href="#/websearch" class="nav-link" data-route="websearch">Web Search</a>
+                <a href="#/config" class="nav-link" data-route="config">Raw Config</a>
+                <a href="#/logs" class="nav-link" data-route="logs">Logs</a>
+            </nav>
+            <div class="sidebar-actions">
+                <button id="btn-reload" onclick="app.reloadConfig()" title="Reload from disk">Reload</button>
+                <button id="btn-save" onclick="app.saveConfig()" title="Save to disk">Save</button>
+            </div>
+            <div id="persist-badge" class="badge hidden">Unsaved changes</div>
+        </aside>
+        <main id="content">
+            <div class="loading">Loading...</div>
+        </main>
+    </div>
+    <div id="toast-container"></div>
+    <script src="/ui/static/components/common.js"></script>
+    <script src="/ui/static/components/status.js"></script>
+    <script src="/ui/static/components/providers.js"></script>
+    <script src="/ui/static/components/models.js"></script>
+    <script src="/ui/static/components/fallback.js"></script>
+    <script src="/ui/static/components/config.js"></script>
+    <script src="/ui/static/components/websearch.js"></script>
+    <script src="/ui/static/components/logs.js"></script>
+    <script src="/ui/static/app.js"></script>
+</body>
+</html>

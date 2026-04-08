@@ -7,18 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
-	"strings"
 )
-
-// envVarRegex matches ${VAR_NAME} or $VAR_NAME patterns
-var envVarRegex = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)`)
-
-// isValidProtocol checks if the given string is a valid protocol name.
-// Valid protocols are: "openai", "anthropic", "responses".
-func isValidProtocol(p string) bool {
-	return p == "openai" || p == "anthropic" || p == "responses"
-}
 
 // Loader handles loading and validating configuration from JSON files.
 type Loader struct{}
@@ -48,113 +37,13 @@ func (l *Loader) Load(path string) (*Schema, error) {
 		return nil, fmt.Errorf("failed to parse config JSON: %w", err)
 	}
 
-	if err := l.validate(&schema); err != nil {
+	if err := Validate(&schema); err != nil {
 		return nil, err
 	}
 
 	l.resolveEnvVars(&schema)
 
 	return &schema, nil
-}
-
-// validate checks that the configuration schema is valid according to the rules:
-//   - At least one provider required
-//   - Each provider must have: name, endpoints (at least one)
-//   - Endpoints must use valid protocol names
-//   - If multiple endpoints, default must be specified and valid
-//   - At least one API key source (apiKey or envApiKey) per provider
-//   - Model mappings must reference existing providers
-//   - If fallback.enabled, provider must exist
-//
-// @param s - the schema to validate
-// @return error - a descriptive error if validation fails, nil otherwise
-func (l *Loader) validate(s *Schema) error {
-	// Validate at least one provider
-	if len(s.Providers) == 0 {
-		return fmt.Errorf("at least one provider required")
-	}
-
-	// Build a set of valid provider names for reference validation
-	providerNames := make(map[string]bool, len(s.Providers))
-
-	// Validate each provider
-	for i, p := range s.Providers {
-		providerLabel := p.Name
-		if providerLabel == "" {
-			providerLabel = fmt.Sprintf("index %d", i)
-		}
-
-		// Validate name is required
-		if p.Name == "" {
-			return fmt.Errorf("provider '%s': name is required", providerLabel)
-		}
-
-		// Validate endpoints is required and has at least one entry
-		if len(p.Endpoints) == 0 {
-			return fmt.Errorf("provider '%s': endpoints is required with at least one protocol endpoint", p.Name)
-		}
-
-		// Validate endpoints format
-		for protocol := range p.Endpoints {
-			if !isValidProtocol(protocol) {
-				return fmt.Errorf("provider '%s': invalid protocol '%s' in endpoints (must be openai, anthropic, or responses)", p.Name, protocol)
-			}
-		}
-
-		// Multi-protocol providers must have a default if more than one endpoint
-		if len(p.Endpoints) > 1 {
-			if p.Default == "" {
-				return fmt.Errorf("provider '%s': 'default' field is required when multiple endpoints are configured", p.Name)
-			}
-			if !isValidProtocol(p.Default) {
-				return fmt.Errorf("provider '%s': default protocol '%s' is invalid (must be openai, anthropic, or responses)", p.Name, p.Default)
-			}
-			if _, exists := p.Endpoints[p.Default]; !exists {
-				return fmt.Errorf("provider '%s': default protocol '%s' not found in endpoints", p.Name, p.Default)
-			}
-		} else if p.Default != "" {
-			// Single-endpoint providers: validate Default if explicitly set
-			if !isValidProtocol(p.Default) {
-				return fmt.Errorf("provider '%s': default protocol '%s' is invalid (must be openai, anthropic, or responses)", p.Name, p.Default)
-			}
-			if _, exists := p.Endpoints[p.Default]; !exists {
-				return fmt.Errorf("provider '%s': default protocol '%s' not found in endpoints", p.Name, p.Default)
-			}
-		}
-
-		// Validate at least one API key source
-		if p.APIKey == "" && p.EnvAPIKey == "" {
-			return fmt.Errorf("provider '%s': at least one of apiKey or envApiKey is required", p.Name)
-		}
-
-		providerNames[p.Name] = true
-	}
-
-	// Validate model mappings reference existing providers
-	for name, mc := range s.Models {
-		if !providerNames[mc.Provider] {
-			return fmt.Errorf("model '%s' references unknown provider '%s'", name, mc.Provider)
-		}
-
-		// Validate type field if present
-		if mc.Type != "" && mc.Type != "openai" && mc.Type != "anthropic" && mc.Type != "auto" {
-			return fmt.Errorf("model '%s': type must be 'openai', 'anthropic', or 'auto'", name)
-		}
-	}
-
-	// Validate fallback configuration
-	if s.Fallback.Enabled {
-		if !providerNames[s.Fallback.Provider] {
-			return fmt.Errorf("fallback references unknown provider '%s'", s.Fallback.Provider)
-		}
-
-		// Validate fallback type field if present
-		if s.Fallback.Type != "" && s.Fallback.Type != "openai" && s.Fallback.Type != "anthropic" && s.Fallback.Type != "auto" {
-			return fmt.Errorf("fallback: type must be 'openai', 'anthropic', or 'auto'")
-		}
-	}
-
-	return nil
 }
 
 // resolveEnvVars resolves environment variables in the configuration.
@@ -166,44 +55,14 @@ func (l *Loader) validate(s *Schema) error {
 func (l *Loader) resolveEnvVars(s *Schema) {
 	for i := range s.Providers {
 		p := &s.Providers[i]
-		// Expand env vars in apiKey if it contains ${...} pattern
-		p.APIKey = expandEnvVars(p.APIKey)
+		// Don't expand ${VAR} patterns in apiKey - preserve raw syntax for display/editing
+		// Expansion happens dynamically in Provider.GetAPIKey() at runtime
 		// If apiKey is empty and envApiKey is set, get from env
 		if p.APIKey == "" && p.EnvAPIKey != "" {
 			p.APIKey = os.Getenv(p.EnvAPIKey)
 		}
 	}
 
-	// Expand environment variables in websearch config
-	s.WebSearch.ExaAPIKey = expandEnvVars(s.WebSearch.ExaAPIKey)
-	s.WebSearch.BraveAPIKey = expandEnvVars(s.WebSearch.BraveAPIKey)
-}
-
-// expandEnvVars expands ${VAR_NAME} patterns in a string with the
-// corresponding environment variable values. If the environment
-// variable is not set, the pattern is left unchanged.
-//
-// @param s - the string to expand
-// @return the expanded string
-func expandEnvVars(s string) string {
-	if s == "" {
-		return s
-	}
-	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
-		// Extract variable name from ${VAR} or $VAR format
-		varName := ""
-		if strings.HasPrefix(match, "${") && strings.HasSuffix(match, "}") {
-			varName = match[2 : len(match)-1]
-		} else if strings.HasPrefix(match, "$") {
-			varName = match[1:]
-		}
-		if varName == "" {
-			return match
-		}
-		if value := os.Getenv(varName); value != "" {
-			return value
-		}
-		// If env var not set, return empty string (or could return original match)
-		return ""
-	})
+	// Don't expand ${VAR} patterns in websearch API keys - preserve raw syntax
+	// for display/editing. Expansion happens at service initialization time.
 }

@@ -705,19 +705,7 @@ func TestNewMessagesHandler(t *testing.T) {
 }
 
 func TestNewModelsHandler(t *testing.T) {
-	cfg := &config.Config{
-		AppConfig: &config.Schema{
-			Providers: []config.Provider{
-				{
-					Name:      "openai",
-					Endpoints: map[string]string{"openai": "https://api.example.com/v1/chat/completions"},
-					APIKey:    "test-key",
-				},
-			},
-		},
-	}
-
-	handler := NewModelsHandler(cfg)
+	handler := NewModelsHandler(nil)
 	if handler == nil {
 		t.Error("expected non-nil handler")
 	}

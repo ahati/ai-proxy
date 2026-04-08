@@ -4,12 +4,13 @@
 //
 // Thread Safety:
 //   - SSEChunk is a value type and is safe for concurrent read access
-//   - captureWriter is NOT thread-safe; use external synchronization if sharing
+//   - captureWriter IS thread-safe via atomic operations
 //   - All functions in this file are pure or operate on single-goroutine data
 package capture
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"time"
 )
 
@@ -112,7 +113,7 @@ type CaptureWriter interface {
 // captureWriter implements CaptureWriter with offset-based timing.
 // It records chunks relative to a start time for timeline reconstruction.
 //
-// Thread Safety: NOT thread-safe. External synchronization required for concurrent access.
+// Thread Safety: Thread-safe via atomic operations. Safe for concurrent use.
 type captureWriter struct {
 	// start is the reference time for calculating chunk offsets.
 	// All chunks record their offset relative to this timestamp.
@@ -120,9 +121,10 @@ type captureWriter struct {
 	start time.Time
 
 	// chunks stores all recorded SSE chunks in order.
+	// Uses atomic.Value to store *[]SSEChunk for thread-safe concurrent access.
 	// Initialized as empty slice, never nil after NewCaptureWriter.
-	// Valid values: slice of SSEChunk, may be empty.
-	chunks []SSEChunk
+	// Valid values: atomic.Value holding pointer to slice of SSEChunk.
+	chunks atomic.Value
 }
 
 // NewCaptureWriter creates a CaptureWriter that records chunks relative to the given start time.
@@ -140,10 +142,12 @@ type captureWriter struct {
 func NewCaptureWriter(start time.Time) CaptureWriter {
 	// Initialize with empty slice (not nil) to distinguish from uninitialized
 	// This allows callers to safely iterate over Chunks() without nil checks
-	return &captureWriter{
-		start:  start,
-		chunks: []SSEChunk{},
+	initialChunks := &[]SSEChunk{}
+	cw := &captureWriter{
+		start: start,
 	}
+	cw.chunks.Store(initialChunks)
+	return cw
 }
 
 // RecordChunk appends a new SSE chunk to the writer.
@@ -153,11 +157,11 @@ func NewCaptureWriter(start time.Time) CaptureWriter {
 // @param data  - Raw chunk data bytes. Empty slices are ignored.
 //
 // @pre cw != nil (receiver must be valid)
-// @post If len(data) > 0, new chunk appended to cw.chunks
+// @post If len(data) > 0, new chunk appended atomically
 // @post If len(data) == 0, no changes made (early return)
 //
 // @note Empty data chunks are ignored as they provide no useful information.
-// @note NOT thread-safe; do not call concurrently from multiple goroutines.
+// @note Thread-safe: uses atomic compare-and-swap for concurrent access.
 func (cw *captureWriter) RecordChunk(event string, data []byte) {
 	// Ignore empty chunks to avoid polluting the recording with meaningless entries
 	// SSE keep-alive chunks typically have empty data and don't need recording
@@ -167,25 +171,53 @@ func (cw *captureWriter) RecordChunk(event string, data []byte) {
 	// Create new chunk with current offset from start time
 	// OffsetMS calculates elapsed time for timeline reconstruction
 	chunk := NewSSEChunk(OffsetMS(cw.start), event, data)
-	// Append to slice; this may cause reallocation but is acceptable for recording
-	cw.chunks = append(cw.chunks, chunk)
+
+	// Atomic compare-and-swap loop for thread-safe append
+	// This handles concurrent appends without mutex overhead
+	for {
+		currentPtr := cw.chunks.Load().(*[]SSEChunk)
+		current := *currentPtr
+
+		// Create a NEW slice with sufficient capacity to avoid shared array writes
+		// This prevents races when append writes to the underlying array
+		newSlice := make([]SSEChunk, len(current), len(current)+1)
+		copy(newSlice, current)
+		newSlice = append(newSlice, chunk)
+		newPtr := &newSlice
+
+		// Try to atomically swap in the new slice
+		if cw.chunks.CompareAndSwap(currentPtr, newPtr) {
+			break // Success - chunk recorded
+		}
+		// CAS failed - another goroutine appended concurrently, retry
+	}
 }
 
 // Chunks returns all recorded SSE chunks.
-// Returns a reference to the internal slice; modifications affect the writer.
+// Returns an immutable snapshot copy of the chunks slice.
 //
 // @return Slice of recorded SSEChunk values. Never nil, may be empty.
 //
 // @pre cw != nil (receiver must be valid)
-// @post Returned slice is the same reference as internal storage
+// @post Returned slice is a copy and safe to modify independently
 //
-// @note Returned slice shares storage with writer; modifications affect both.
-// @note NOT thread-safe; do not call concurrently with RecordChunk.
-// @note Callers should copy the slice if they need to modify it independently.
+// @note Thread-safe: returns immutable snapshot copy.
+// @note Caller can safely iterate without concern for concurrent modifications.
+// @note Allocation occurs on each call - use sparingly in performance-critical paths.
 func (cw *captureWriter) Chunks() []SSEChunk {
-	// Return direct reference to avoid allocation
-	// Callers are responsible for copying if they need to modify
-	return cw.chunks
+	// Load current snapshot atomically
+	currentPtr := cw.chunks.Load().(*[]SSEChunk)
+	current := *currentPtr
+
+	// Return COPY to ensure caller has immutable snapshot
+	// This prevents race conditions if chunks are still being added
+	if len(current) == 0 {
+		return []SSEChunk{}
+	}
+
+	result := make([]SSEChunk, len(current))
+	copy(result, current)
+	return result
 }
 
 // ExtractRequestIDFromSSEChunk attempts to extract a request ID from SSE chunk JSON data.

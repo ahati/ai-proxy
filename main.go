@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"ai-proxy/api"
+	"ai-proxy/capture"
 	"ai-proxy/config"
 	"ai-proxy/conversation"
 	"ai-proxy/logging"
@@ -53,6 +54,13 @@ func main() {
 		logging.InfoMsg("Web search service initialized: backend=%s", websearch.DefaultService.GetBackend())
 	}
 
+	// Initialize in-memory log store
+	{
+		memCfg := cfg.AppConfig.MemoryLogs
+		capture.InitMemoryStore(memCfg.IsEnabled(), memCfg.GetCapacity())
+		logging.InfoMsg("In-memory log store: enabled=%v, capacity=%d", memCfg.IsEnabled(), memCfg.GetCapacity())
+	}
+
 	// Initialize storage for request capture if logging is enabled
 	storage := api.InitStorage(cfg.SSELogDir)
 	if storage != nil {
@@ -61,9 +69,15 @@ func main() {
 		logging.InfoMsg("SSE capture disabled (use --sse-log-dir to enable)")
 	}
 
+	// Create config manager for thread-safe live config updates
+	var manager *config.ConfigManager
+	if cfg.AppConfig != nil {
+		manager = config.NewManager(cfg.AppConfig, cfg.ConfigFile)
+	}
+
 	// Create server with loaded configuration
 	// Middleware is added first so it applies to all routes
-	server := api.NewServer(cfg, api.NewCaptureMiddleware(storage).Handler())
+	server := api.NewServer(cfg, manager, api.NewCaptureMiddleware(storage).Handler())
 
 	// Build listen address from configured port
 	addr := ":" + cfg.Port

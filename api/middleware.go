@@ -4,6 +4,8 @@
 package api
 
 import (
+	"strings"
+
 	"ai-proxy/capture"
 	"ai-proxy/logging"
 
@@ -35,6 +37,12 @@ func NewCaptureMiddleware(storage *capture.Storage) *CaptureMiddleware {
 	return &CaptureMiddleware{storage: storage}
 }
 
+// isUIPath returns true if the request path starts with /ui/, which should
+// be excluded from in-memory logging to avoid noise from the admin UI itself.
+func isUIPath(path string) bool {
+	return strings.HasPrefix(path, "/ui/") || path == "/ui"
+}
+
 // Handler returns a Gin middleware function that captures request context
 // and writes to storage asynchronously after request processing completes.
 //
@@ -51,6 +59,7 @@ func NewCaptureMiddleware(storage *capture.Storage) *CaptureMiddleware {
 // @post Captured data is written to storage asynchronously after request completes.
 // @note Asynchronous write ensures request latency is not affected by disk I/O.
 // @note If m.storage is nil, capture is disabled and no data is written.
+// @note Requests to /ui/* paths are excluded from in-memory logging.
 func (m *CaptureMiddleware) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Create capture context to hold all request/response data
@@ -59,22 +68,35 @@ func (m *CaptureMiddleware) Handler() gin.HandlerFunc {
 		// Attach capture context to request context so handlers can access it
 		// This enables downstream code to populate capture data
 		ctx := capture.WithCaptureContext(c.Request.Context(), cc)
+
+		// Record the downstream request so non-API routes (e.g. /api/ui/logs)
+		// also capture headers. API handlers will overwrite this with the full
+		// body when they process the request.
+		cc.Recorder.RecordDownstreamRequest(c.Request.Header, nil)
 		c.Request = c.Request.WithContext(ctx)
+
+		// Capture the request path synchronously before c.Next() and goroutines.
+		// After c.Next() returns, Gin may recycle the context, making c.Request
+		// unsafe to access from the goroutine.
+		requestPath := c.Request.URL.Path
 
 		// Process the request - control returns here after handler completes
 		c.Next()
 
-		// Write captured data asynchronously to avoid blocking the response
-		// Goroutine is safe because capture context is self-contained
+		// Write captured data asynchronously to avoid blocking the response.
+		// Goroutine is safe because capture context is self-contained and
+		// requestPath was captured synchronously above.
 		go func() {
-			// Early exit if storage is not configured
-			// This allows capture to be disabled without code changes
-			if m.storage == nil {
-				return
+			// Write to in-memory store if available.
+			// Exclude /ui/* paths to avoid logging the admin UI's own requests.
+			if store := capture.GetDefaultMemoryStore(); store != nil && !isUIPath(requestPath) {
+				store.Store(cc.Recorder)
 			}
-			// Log any errors to help with debugging
-			if err := m.storage.Write(cc.Recorder); err != nil {
-				logging.ErrorMsg("Failed to write capture: %v", err)
+			// Write to file storage if configured
+			if m.storage != nil {
+				if err := m.storage.Write(cc.Recorder); err != nil {
+					logging.ErrorMsg("Failed to write capture: %v", err)
+				}
 			}
 		}()
 	}

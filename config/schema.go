@@ -4,9 +4,14 @@ package config
 
 import (
 	"os"
+	"regexp"
+	"strings"
 
 	"ai-proxy/types"
 )
+
+// envVarRegex matches ${VAR_NAME} or $VAR_NAME patterns
+var envVarRegex = regexp.MustCompile(`\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)`)
 
 // Provider defines an upstream API provider configuration.
 // A provider represents an external API service that can handle requests.
@@ -31,15 +36,45 @@ type Provider struct {
 }
 
 // GetAPIKey returns the API key for this provider.
-// If APIKey is set directly, it is returned.
+// If APIKey is set directly (may contain ${VAR} syntax), it is expanded and returned.
 // Otherwise, the value is fetched from the environment variable specified by EnvAPIKey.
 //
 // @return string - the resolved API key, or empty string if not configured
 func (p *Provider) GetAPIKey() string {
 	if p.APIKey != "" {
-		return p.APIKey
+		// Expand ${VAR} syntax if present, otherwise return as-is
+		return expandEnvVars(p.APIKey)
 	}
 	return os.Getenv(p.EnvAPIKey)
+}
+
+// expandEnvVars expands ${VAR_NAME} patterns in a string with the
+// corresponding environment variable values. If the environment
+// variable is not set, the pattern is left unchanged.
+//
+// @param s - the string to expand
+// @return the expanded string
+func expandEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
+		// Extract variable name from ${VAR} or $VAR format
+		varName := ""
+		if strings.HasPrefix(match, "${") && strings.HasSuffix(match, "}") {
+			varName = match[2 : len(match)-1]
+		} else if strings.HasPrefix(match, "$") {
+			varName = match[1:]
+		}
+		if varName == "" {
+			return match
+		}
+		if value := os.Getenv(varName); value != "" {
+			return value
+		}
+		// If env var not set, return empty string (or could return original match)
+		return ""
+	})
 }
 
 // GetEndpoint returns the endpoint URL for the specified protocol.
@@ -175,6 +210,41 @@ type ResponsesConfig struct {
 	MaxContextTokens int `json:"max_context_tokens"`
 }
 
+// MemoryLogsConfig defines the configuration for in-memory request logging.
+// When enabled, the last N captured request/response logs are stored in memory
+// and accessible via the /ui/api/logs API and Logs UI page.
+type MemoryLogsConfig struct {
+	// Enabled determines whether in-memory logging is active.
+	// When nil (omitted from JSON), the feature defaults to enabled.
+	// Set to false to disable at startup; can be toggled at runtime via UI.
+	Enabled *bool `json:"enabled,omitempty"`
+	// Capacity is the maximum number of log entries to retain.
+	// Oldest entries are discarded when the limit is reached.
+	// Default: 2000. Minimum: 10.
+	Capacity int `json:"capacity,omitempty"`
+}
+
+// IsEnabled returns whether in-memory logging is enabled.
+// Returns true (enabled) when Enabled is nil (omitted from config).
+//
+// @return true if in-memory logging should be active
+func (c MemoryLogsConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+// GetCapacity returns the configured capacity or the default of 2000.
+//
+// @return the effective capacity for the in-memory log store
+func (c MemoryLogsConfig) GetCapacity() int {
+	if c.Capacity <= 0 {
+		return 2000
+	}
+	return c.Capacity
+}
+
 // Schema is the root configuration structure for the multi-provider proxy.
 // It contains all provider definitions, model mappings, and fallback settings.
 type Schema struct {
@@ -190,4 +260,6 @@ type Schema struct {
 	Responses ResponsesConfig `json:"responses"`
 	// WebSearch defines the web search service configuration.
 	WebSearch types.WebSearchConfig `json:"websearch"`
+	// MemoryLogs defines the in-memory request logging configuration.
+	MemoryLogs MemoryLogsConfig `json:"memoryLogs"`
 }

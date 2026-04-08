@@ -17,15 +17,15 @@ import (
 //
 // @note This endpoint returns locally configured models, not upstream models.
 type ModelsHandler struct {
-	cfg *config.Config
+	manager *config.ConfigManager
 }
 
 // NewModelsHandler creates a Gin handler for the /v1/models endpoint.
 //
-// @param cfg - Application configuration. Must not be nil.
+// @param m - Configuration manager. May be nil.
 // @return Gin handler function that processes models list requests.
-func NewModelsHandler(cfg *config.Config) gin.HandlerFunc {
-	h := &ModelsHandler{cfg: cfg}
+func NewModelsHandler(m *config.ConfigManager) gin.HandlerFunc {
+	h := &ModelsHandler{manager: m}
 	return h.Handle
 }
 
@@ -47,12 +47,18 @@ type ModelsResponse struct {
 //
 // @param c - Gin context for the HTTP request.
 func (h *ModelsHandler) Handle(c *gin.Context) {
-	schema := h.cfg.GetSchema()
-	if schema == nil {
+	if h.manager == nil {
 		sendOpenAIError(c, http.StatusInternalServerError, "Configuration not loaded")
 		return
 	}
 
+	snap := h.manager.Get()
+	if snap == nil || snap.Schema == nil {
+		sendOpenAIError(c, http.StatusInternalServerError, "Configuration not loaded")
+		return
+	}
+
+	schema := snap.Schema
 	models := make([]Model, 0, len(schema.Models))
 	for id, mc := range schema.Models {
 		models = append(models, Model{

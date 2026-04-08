@@ -407,3 +407,49 @@ func TestCaptureMiddleware_Handler_AbortHandlers(t *testing.T) {
 		t.Error("capture context should still be set even after abort")
 	}
 }
+
+func TestCaptureMiddleware_Handler_RecordsDownstreamRequest(t *testing.T) {
+	m := NewCaptureMiddleware(nil)
+	handler := m.Handler()
+
+	tests := []struct {
+		name   string
+		path   string
+		method string
+	}{
+		{name: "API route", path: "/v1/responses", method: "POST"},
+		{name: "logs API route", path: "/ui/api/logs", method: "GET"},
+		{name: "health check", path: "/health", method: "GET"},
+		{name: "root", path: "/", method: "GET"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.Header.Set("X-Custom-Header", "test-value")
+			c.Request = req
+
+			handler(c)
+
+			cc := capture.GetCaptureContext(c.Request.Context())
+			if cc == nil {
+				t.Fatal("capture context is nil")
+			}
+
+			// Verify downstream request is captured with headers
+			if cc.Recorder.Data().DownstreamRequest == nil {
+				t.Fatal("DownstreamRequest should be populated by middleware")
+			}
+
+			if cc.Recorder.Data().DownstreamRequest.Headers == nil {
+				t.Error("DownstreamRequest headers should not be nil")
+			}
+
+			if v := cc.Recorder.Data().DownstreamRequest.Headers["X-Custom-Header"]; v != "test-value" {
+				t.Errorf("expected X-Custom-Header 'test-value', got %q", v)
+			}
+		})
+	}
+}
