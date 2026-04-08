@@ -4,6 +4,8 @@ package websearch
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"time"
 
 	"ai-proxy/types"
@@ -83,6 +85,29 @@ func (a *TransformerAdapter) IsEnabled() bool {
 //
 // @param cfg - the web search configuration from config.json
 // @return *Service - initialized service, or nil if disabled/invalid
+// envVarPattern matches ${VAR} or $VAR patterns in strings.
+var envVarPattern = regexp.MustCompile(`\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// expandEnvVars expands ${VAR} and $VAR patterns in a string using environment variables.
+// Returns the original string if no patterns are found. Returns empty string for unset vars.
+func expandEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
+		varName := ""
+		if len(match) > 3 && match[0] == '$' && match[1] == '{' && match[len(match)-1] == '}' {
+			varName = match[2 : len(match)-1]
+		} else if len(match) > 1 && match[0] == '$' {
+			varName = match[1:]
+		}
+		if varName == "" {
+			return match
+		}
+		return os.Getenv(varName)
+	})
+}
+
 func InitDefaultService(cfg types.WebSearchConfig) *Service {
 	if !cfg.Enabled {
 		return nil
@@ -103,8 +128,8 @@ func InitDefaultService(cfg types.WebSearchConfig) *Service {
 		DefaultBackend: cfg.Provider,
 		MaxResults:     maxResults,
 		Timeout:        timeout,
-		ExaAPIKey:      cfg.ExaAPIKey,
-		BraveAPIKey:    cfg.BraveAPIKey,
+		ExaAPIKey:      expandEnvVars(cfg.ExaAPIKey),
+		BraveAPIKey:    expandEnvVars(cfg.BraveAPIKey),
 	})
 }
 

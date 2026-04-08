@@ -455,32 +455,40 @@ func setContextOnTransformer(transformer transform.SSETransformer, ctx context.C
 // @post cc.Recorder contains complete downstream and upstream response data.
 // @post cc.RequestID is set if found in SSE stream.
 func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.CaptureWriter) {
+	// Get immutable snapshots of captured chunks
+	// This is now thread-safe via atomic snapshot in Chunks()
+	downstreamChunks := downstream.Chunks()
+	upstreamChunks := upstream.Chunks()
+
+	// Log chunk counts for debugging
+	logging.DebugMsg("finalizeCapture: %d downstream chunks, %d upstream chunks",
+		len(downstreamChunks), len(upstreamChunks))
+
 	// Record downstream response (transformed events sent to client)
 	// Use thread-safe method instead of direct field access
 	downstreamRecorder := cc.Recorder.RecordDownstreamResponse()
 	// Transfer captured chunks directly, preserving their original timing
 	// The chunks already have correct OffsetMS from when they were recorded during streaming
-	for _, chunk := range downstream.Chunks() {
+	for _, chunk := range downstreamChunks {
 		downstreamRecorder.RecordChunkPreservingTiming(chunk)
 	}
 
 	// Record upstream response (original events from upstream)
-	// May be nil if upstream request failed before response
-	if cc.Recorder.Data().UpstreamResponse != nil {
-		upstreamRecorder := cc.Recorder.RecordUpstreamResponse(
-			cc.Recorder.Data().UpstreamResponse.StatusCode,
-			nil, // Headers already captured during proxy request
-		)
+	// The upstream response was already initialized in proxy/client.go with headers
+	// We just need to add chunks to it, not recreate it
+	if upstreamRecorder := cc.Recorder.GetUpstreamResponseRecorder(); upstreamRecorder != nil {
 		// Transfer captured chunks directly, preserving their original timing
-		for _, chunk := range upstream.Chunks() {
+		for _, chunk := range upstreamChunks {
 			upstreamRecorder.RecordChunkPreservingTiming(chunk)
 		}
+	} else {
+		logging.InfoMsg("finalizeCapture: upstream recorder is nil - chunks may be lost")
 	}
 
 	// Extract request ID from SSE stream if not already found
 	// Request ID is typically in the first SSE event from LLM APIs
 	if !cc.IDExtracted {
-		for _, chunk := range downstream.Chunks() {
+		for _, chunk := range downstreamChunks {
 			// Attempt to extract ID from each chunk until found
 			if id := capture.ExtractRequestIDFromSSEChunk(chunk.Data); id != "" {
 				cc.SetRequestID(id)
@@ -492,13 +500,13 @@ func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.Ca
 
 	// Extract and log token usage from captured chunks
 	// This provides a compact summary of request costs in a powerline-style format
-	upstreamUsage := capture.ExtractTokenUsageFromChunks(upstream.Chunks())
-	downstreamUsage := capture.ExtractTokenUsageFromChunks(downstream.Chunks())
+	upstreamUsage := capture.ExtractTokenUsageFromChunks(upstreamChunks)
+	downstreamUsage := capture.ExtractTokenUsageFromChunks(downstreamChunks)
 
 	// Extract finish reasons from both upstream and downstream chunks
 	// Upstream: reason from LLM API, Downstream: reason sent to client (may differ after transformation)
-	upstreamReason := capture.ExtractFinishReasonFromChunks(upstream.Chunks())
-	downstreamReason := capture.ExtractFinishReasonFromChunks(downstream.Chunks())
+	upstreamReason := capture.ExtractFinishReasonFromChunks(upstreamChunks)
+	downstreamReason := capture.ExtractFinishReasonFromChunks(downstreamChunks)
 
 	// Build cache status indicators (separate items)
 	var cacheParts []string

@@ -310,6 +310,56 @@ func (r *Recorder) RecordUpstreamRequest(headers http.Header, body []byte) {
 	}
 }
 
+// GetUpstreamResponseRecorder returns a responseRecorder for the existing upstream response.
+// Use this to add chunks to an already-initialized upstream response without overwriting headers.
+//
+// @return Pointer to responseRecorder if upstream response exists, nil otherwise.
+//
+// @pre r != nil (receiver must be valid)
+// @post If upstream response exists, returned recorder writes to it
+// @post If upstream response is nil, returns nil
+//
+// @note Thread-safe: uses mutex for exclusive access during check.
+// @note Does NOT create a new upstream response; only returns existing one.
+func (r *Recorder) GetUpstreamResponseRecorder() *responseRecorder {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.data.UpstreamResponse == nil {
+		return nil
+	}
+
+	return &responseRecorder{
+		capture: r.data.UpstreamResponse,
+		started: r.started,
+	}
+}
+
+// GetDownstreamResponseRecorder returns a responseRecorder for the existing downstream response.
+// Use this to add chunks to an already-initialized downstream response without overwriting headers.
+//
+// @return Pointer to responseRecorder if downstream response exists, nil otherwise.
+//
+// @pre r != nil (receiver must be valid)
+// @post If downstream response exists, returned recorder writes to it
+// @post If downstream response is nil, returns nil
+//
+// @note Thread-safe: uses mutex for exclusive access during check.
+// @note Does NOT create a new downstream response; only returns existing one.
+func (r *Recorder) GetDownstreamResponseRecorder() *responseRecorder {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.data.DownstreamResponse == nil {
+		return nil
+	}
+
+	return &responseRecorder{
+		capture: r.data.DownstreamResponse,
+		started: r.started,
+	}
+}
+
 // RecordUpstreamResponse initializes upstream response capture and returns a responseRecorder for chunk recording.
 //
 // @param statusCode - HTTP status code from upstream response.
@@ -411,7 +461,7 @@ func (r *Recorder) SetRequestID(id string) {
 // responseRecorder records SSE chunks for a single response stream.
 // It writes chunks to a shared SSEResponseCapture.
 //
-// Thread Safety: NOT thread-safe. Use from single goroutine only.
+// Thread Safety: Thread-safe via mutex protection for chunk operations.
 type responseRecorder struct {
 	// capture is the target SSEResponseCapture to write chunks to.
 	// Must not be nil for valid operation.
@@ -422,6 +472,9 @@ type responseRecorder struct {
 	// Used to compute OffsetMS for each chunk.
 	// Valid values: any valid time.Time.
 	started time.Time
+
+	// mu protects capture.Chunks append operations.
+	mu sync.Mutex
 }
 
 // RecordChunk appends an SSE chunk with the given event and raw data.
@@ -489,13 +542,16 @@ func (rr *responseRecorder) RecordChunkBytes(event string, data []byte) {
 // @pre rr != nil && rr.capture != nil (receiver must be valid)
 // @post Chunk is appended to rr.capture.Chunks with original timing preserved
 //
-// @note NOT thread-safe; use from single goroutine.
+// @note Thread-safe: uses mutex for chunk append synchronization.
 // @note Nil-safe: handles nil receiver gracefully.
 func (rr *responseRecorder) RecordChunkPreservingTiming(chunk SSEChunk) {
 	// Defensive nil check to prevent panic on invalid receiver
 	if rr == nil || rr.capture == nil {
 		return
 	}
+
+	rr.mu.Lock()
+	defer rr.mu.Unlock()
 
 	// Append the chunk directly, preserving all fields including OffsetMS
 	// This is the key difference from RecordChunk which recalculates timing

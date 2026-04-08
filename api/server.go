@@ -136,6 +136,10 @@ func (s *Server) setupRoutes() {
 			uiAPI.POST("/config/reload", cfgHandler.ReloadConfig)
 			uiAPI.POST("/config/save", cfgHandler.SaveConfig)
 			uiAPI.GET("/status", cfgHandler.GetStatus)
+
+			// Web search service reload
+			wsHandler := NewWebSearchHandler(s.manager)
+			uiAPI.POST("/config/websearch/reload", wsHandler.ReloadService)
 		}
 
 		// In-memory logs API

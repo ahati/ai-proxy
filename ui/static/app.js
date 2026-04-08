@@ -52,6 +52,7 @@ const routes = {
     '#/models': renderModels,
     '#/fallback': renderFallback,
     '#/config': renderRawConfig,
+    '#/websearch': renderWebSearch,
     '#/logs': renderLogs,
 };
 

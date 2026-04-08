@@ -63,7 +63,6 @@ func (l *Loader) resolveEnvVars(s *Schema) {
 		}
 	}
 
-	// Expand environment variables in websearch config
-	s.WebSearch.ExaAPIKey = expandEnvVars(s.WebSearch.ExaAPIKey)
-	s.WebSearch.BraveAPIKey = expandEnvVars(s.WebSearch.BraveAPIKey)
+	// Don't expand ${VAR} patterns in websearch API keys - preserve raw syntax
+	// for display/editing. Expansion happens at service initialization time.
 }
