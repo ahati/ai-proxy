@@ -563,6 +563,7 @@ func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.Ca
 //
 // @pre resp != nil and resp.Body is readable.
 // @post Error response is sent to client in OpenAI error format.
+// @post Capture is finalized with error response data if capture is enabled.
 func handleUpstreamError(c *gin.Context, resp *http.Response) {
 	// Read the error body for inclusion in client error message
 	body, _ := io.ReadAll(resp.Body)
@@ -571,6 +572,28 @@ func handleUpstreamError(c *gin.Context, resp *http.Response) {
 	// Record the upstream error for capture
 	c.Set("upstream_error_body", msg)
 	c.Set("upstream_error_status", resp.StatusCode)
+
+	// Finalize capture for error responses
+	// This ensures error responses are logged with their status and body
+	// Note: RecordUpstreamResponse was already called in proxy/client.go Do(),
+	// so we only need to add the error body as a chunk.
+	if c.Request != nil {
+		cc := capture.GetCaptureContext(c.Request.Context())
+		if cc != nil {
+			// Append the error body to the already-recorded upstream response
+			upstreamResp := cc.Recorder.GetUpstreamResponseRecorder()
+			if upstreamResp != nil && len(body) > 0 {
+				upstreamResp.RecordChunkBytes("", body)
+			}
+
+			// Create empty capture writers (no downstream streaming for errors)
+			downstream := capture.NewCaptureWriter(cc.StartTime)
+			upstream := capture.NewCaptureWriter(cc.StartTime)
+
+			// Finalize capture to store the error response
+			finalizeCapture(cc, downstream, upstream)
+		}
+	}
 
 	// Send error in OpenAI format with the original upstream status code
 	// This preserves error details like 400 (bad request), 401 (auth), 429 (rate limit)

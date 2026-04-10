@@ -159,8 +159,14 @@ func (m *MemoryStore) Get(requestID string) (*LogEntry, bool) {
 	defer m.mu.RUnlock()
 
 	for i := 0; i < m.count; i++ {
-		if m.entries[i].RequestID == requestID {
-			entry := m.entries[i]
+		idx := i
+		if m.count == m.capacity {
+			// Buffer is full - calculate actual ring buffer position
+			// Ring buffer: head is next write position, so oldest entry is at head
+			idx = (m.head + i) % m.capacity
+		}
+		if m.entries[idx].RequestID == requestID {
+			entry := m.entries[idx]
 			return &entry, true
 		}
 	}
@@ -182,8 +188,13 @@ func (m *MemoryStore) GetByIDs(ids []string) []LogEntry {
 
 	var result []LogEntry
 	for i := 0; i < m.count; i++ {
-		if idSet[m.entries[i].RequestID] {
-			result = append(result, m.entries[i])
+		idx := i
+		if m.count == m.capacity {
+			// Buffer is full - calculate actual ring buffer position
+			idx = (m.head + i) % m.capacity
+		}
+		if idSet[m.entries[idx].RequestID] {
+			result = append(result, m.entries[idx])
 		}
 	}
 	return result

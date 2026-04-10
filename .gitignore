@@ -7,3 +7,4 @@ converter
 plans
 .ruff_cache
 .build
+.playwright-mcp

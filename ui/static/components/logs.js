@@ -424,12 +424,13 @@ function buildSection(title, type, data, hasChunks) {
             // Store parsed result to avoid re-parsing during hydration
             const cacheId = '__jt_' + (++_jsonTreeCacheCounter);
             _jsonTreeCache.set(cacheId, parsed);
+            _jsonTreeCache.set(cacheId + '_raw', bodyStr);
 
             bodyHtml += '<div class="log-json-toolbar">';
             bodyHtml += '<button class="btn-tree-action" onclick="jsonTreeExpandAll(this)">Expand All</button>';
             bodyHtml += '<button class="btn-tree-action" onclick="jsonTreeCollapseAll(this)">Collapse All</button>';
             bodyHtml += '</div>';
-            bodyHtml += '<div class="log-json-tree-root" data-tree-cache="' + cacheId + '" data-raw="' + escapeHtml(bodyStr) + '"></div>';
+            bodyHtml += '<div class="log-json-tree-root" data-tree-cache="' + cacheId + '"></div>';
         } else {
             // Fallback: non-JSON content renders as plain pre block
             bodyHtml += '<pre class="log-json-block" data-raw="' + escapeHtml(bodyStr) + '">' + escapeHtml(bodyStr) + '</pre>';
@@ -479,7 +480,7 @@ function buildSection(title, type, data, hasChunks) {
         root.replaceChildren(renderJSONTree(parsed, null, !collapsed));
 
         // Free cached value
-        if (cacheId) _jsonTreeCache.delete(cacheId);
+        if (cacheId) { _jsonTreeCache.delete(cacheId); _jsonTreeCache.delete(cacheId + '_raw'); }
     });
 
     section.appendChild(header);
@@ -518,7 +519,8 @@ function copyLogData(btn) {
     const container = btn.parentElement.nextElementSibling;
     if (!container) return;
     // Support both old <pre> blocks and new JSON tree roots
-    const raw = container.getAttribute('data-raw') || container.textContent;
+    const cacheId = container.getAttribute('data-tree-cache');
+    const raw = (cacheId ? _jsonTreeCache.get(cacheId + '_raw') : null) || container.getAttribute('data-raw') || container.textContent;
     navigator.clipboard.writeText(raw).then(() => {
         btn.textContent = 'Copied!';
         setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
