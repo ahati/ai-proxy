@@ -3,18 +3,14 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"ai-proxy/api/pipeline"
 	"ai-proxy/config"
-	"ai-proxy/convert"
-	"ai-proxy/logging"
 	"ai-proxy/router"
 	"ai-proxy/transform"
-	"ai-proxy/types"
 	"ai-proxy/websearch"
 
 	"github.com/gin-gonic/gin"
@@ -103,7 +99,7 @@ func (h *MessagesHandler) ValidateRequest(body []byte) error {
 // For Anthropic providers: passes through without transformation.
 // For OpenAI providers: converts Anthropic Messages to OpenAI Chat Completions.
 //
-// @param ctx - Context for the request (unused in this handler).
+// @param ctx - Context for the request (passed to pipeline for cache status tracking).
 // @param body - Raw request body in Anthropic Messages format.
 // @return Transformed body in the appropriate upstream format.
 // @return Error if transformation fails.
@@ -113,59 +109,18 @@ func (h *MessagesHandler) TransformRequest(ctx context.Context, body []byte) ([]
 		return body, nil
 	}
 
-	// Update model in request to the resolved model
-	var req map[string]interface{}
-	if err := json.Unmarshal(body, &req); err != nil {
+	t, err := pipeline.BuildRequestPipeline(pipeline.RequestConfig{
+		DownstreamFormat: "anthropic",
+		UpstreamFormat:   h.route.OutputProtocol,
+		ResolvedModel:    h.route.Model,
+		IsPassthrough:    h.route.IsPassthrough,
+		ReasoningSplit:   h.route.ReasoningSplit,
+		WebSearchEnabled: websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled(),
+	})
+	if err != nil {
 		return body, nil
 	}
-	req["model"] = h.route.Model
-	updatedBody, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal updated request: %w", err)
-	}
-
-	// Convert web_search_20250305 server tools to regular function tools for
-	// non-Anthropic providers that don't understand server-side web search.
-	// This allows the model to emit tool_use blocks that the proxy's web search
-	// transformer can intercept and execute.
-	if websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled() {
-		updatedBody = convert.ConvertServerWebSearchToFunctionTool(updatedBody)
-	}
-
-	// Passthrough optimization - normalize web_search_tool_result for upstream compatibility
-	// Web search is handled internally, so we must always normalize even in passthrough mode
-	if h.route.IsPassthrough {
-		return convert.NormalizeWebSearchToolResultsInMessages(updatedBody), nil
-	}
-
-	switch h.route.OutputProtocol {
-	case "openai":
-		// Convert Anthropic MessageRequest to OpenAI ChatCompletionRequest
-		transformed, err := transformAnthropicToChat(updatedBody)
-		if err != nil {
-			return nil, err
-		}
-
-		// Inject reasoning_split if configured
-		if h.route.ReasoningSplit {
-			var req map[string]interface{}
-			if err := json.Unmarshal(transformed, &req); err == nil {
-				req["reasoning_split"] = true
-				transformed, _ = json.Marshal(req)
-			}
-		}
-		return transformed, nil
-	case "anthropic":
-		// Normalize web_search_tool_result to tool_result for upstream compatibility
-		// Many Anthropic-compatible providers don't support web_search_tool_result natively
-		return convert.NormalizeWebSearchToolResultsInMessages(updatedBody), nil
-	case "responses":
-		// Convert Anthropic Messages to Responses API format
-		return convert.TransformAnthropicToResponses(updatedBody)
-	default:
-		// Unknown protocol - pass through as-is
-		return updatedBody, nil
-	}
+	return t(ctx, body)
 }
 
 // UpstreamURL returns the upstream API URL based on the resolved provider.
@@ -274,184 +229,6 @@ func (h *MessagesHandler) WriteError(c *gin.Context, status int, msg string) {
 	sendAnthropicError(c, status, msg)
 }
 
-// transformAnthropicToChat converts an Anthropic MessageRequest to OpenAI ChatCompletionRequest.
-// This reuses the transformation logic from the bridge handler.
-func transformAnthropicToChat(body []byte) ([]byte, error) {
-	// Parse the Anthropic format request
-	var anthReq types.MessageRequest
-	if err := json.Unmarshal(body, &anthReq); err != nil {
-		return nil, err
-	}
-
-	// Build the OpenAI format request with corresponding fields
-	// Force streaming mode - this proxy only supports SSE streaming
-	stream := anthReq.Stream
-	if !stream {
-		logging.InfoMsg("Forcing stream=true for upstream request (client did not specify)")
-		stream = true
-	}
-	openReq := types.ChatCompletionRequest{
-		Model:       anthReq.Model,
-		MaxTokens:   anthReq.MaxTokens,
-		Stream:      stream,
-		Temperature: anthReq.Temperature,
-		TopP:        anthReq.TopP,
-		// Request usage statistics from upstream (required for Anthropic SDK)
-		StreamOptions: &types.StreamOptions{IncludeUsage: true},
-	}
-
-	// Convert system message (may be string or array of content blocks)
-	openReq.System = extractSystemMessage(anthReq.System)
-	// Convert messages array (handles content blocks with tool use/results)
-	openReq.Messages = convertAnthropicMessages(anthReq.Messages)
-	// Convert tool definitions (Anthropic input_schema -> OpenAI parameters)
-	openReq.Tools = convertAnthropicTools(anthReq.Tools)
-
-	return json.Marshal(openReq)
-}
-
-// extractSystemMessage extracts a string system message from various
-// Anthropic system field formats.
-// Uses the shared ExtractTextFromContent from convert package.
-func extractSystemMessage(system interface{}) string {
-	return convert.ExtractTextFromContent(system)
-}
-
-// convertAnthropicMessages transforms a slice of Anthropic messages to OpenAI format.
-func convertAnthropicMessages(anthMsgs []types.MessageInput) []types.Message {
-	openMsgs := make([]types.Message, 0, len(anthMsgs))
-	for _, anthMsg := range anthMsgs {
-		openMsgs = append(openMsgs, convertAnthropicMessage(anthMsg))
-	}
-	return openMsgs
-}
-
-// convertAnthropicMessage transforms a single Anthropic message to OpenAI format.
-func convertAnthropicMessage(anthMsg types.MessageInput) types.Message {
-	openMsg := types.Message{Role: anthMsg.Role}
-
-	switch content := anthMsg.Content.(type) {
-	case string:
-		openMsg.Content = content
-	case []interface{}:
-		openMsg.Content, openMsg.ToolCalls, openMsg.ToolCallID = convertAnthropicContentBlocks(content)
-		// Only pure tool_result turns can be represented as OpenAI tool messages.
-		if openMsg.ToolCallID != "" && isPureAnthropicToolResultTurn(content) {
-			openMsg.Role = "tool"
-		}
-	}
-
-	return openMsg
-}
-
-func isPureAnthropicToolResultTurn(blocks []interface{}) bool {
-	if len(blocks) == 0 {
-		return false
-	}
-
-	for _, item := range blocks {
-		block, ok := item.(map[string]interface{})
-		if !ok {
-			return false
-		}
-		blockType, _ := block["type"].(string)
-		if blockType != "tool_result" {
-			return false
-		}
-	}
-
-	return true
-}
-
-// convertAnthropicContentBlocks extracts text content, tool calls, and tool result IDs
-// from Anthropic content blocks.
-func convertAnthropicContentBlocks(blocks []interface{}) (interface{}, []types.ToolCall, string) {
-	var textContent strings.Builder
-	var toolCalls []types.ToolCall
-	var toolCallID string
-
-	for _, item := range blocks {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-
-		switch m["type"] {
-		case "text":
-			if text, ok := m["text"].(string); ok {
-				if textContent.Len() > 0 {
-					textContent.WriteString("\n")
-				}
-				textContent.WriteString(text)
-			}
-		case "tool_use":
-			if id, ok := m["id"].(string); ok {
-				if name, ok := m["name"].(string); ok {
-					input, _ := json.Marshal(m["input"])
-					toolCalls = append(toolCalls, types.ToolCall{
-						ID:   id,
-						Type: "function",
-						Function: types.Function{
-							Name:      name,
-							Arguments: string(input),
-						},
-					})
-				}
-			}
-		case "tool_result":
-			// Extract tool_use_id and content
-			if id, ok := m["tool_use_id"].(string); ok {
-				toolCallID = id
-			}
-			// Extract the tool result content
-			if content, ok := m["content"]; ok {
-				switch c := content.(type) {
-				case string:
-					if textContent.Len() > 0 {
-						textContent.WriteString("\n")
-					}
-					textContent.WriteString(c)
-				case []interface{}:
-					// Handle array content blocks within tool_result
-					for _, block := range c {
-						if blockMap, ok := block.(map[string]interface{}); ok {
-							if blockType, ok := blockMap["type"].(string); ok && blockType == "text" {
-								if t, ok := blockMap["text"].(string); ok {
-									if textContent.Len() > 0 {
-										textContent.WriteString("\n")
-									}
-									textContent.WriteString(t)
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return textContent.String(), toolCalls, toolCallID
-}
-
-// convertAnthropicTools transforms Anthropic tool definitions to OpenAI format.
-func convertAnthropicTools(anthTools []types.ToolDef) []types.Tool {
-	if len(anthTools) == 0 {
-		return nil
-	}
-
-	openTools := make([]types.Tool, 0, len(anthTools))
-	for _, anthTool := range anthTools {
-		openTools = append(openTools, types.Tool{
-			Type: "function",
-			Function: types.ToolFunction{
-				Name:        anthTool.Name,
-				Description: anthTool.Description,
-				Parameters:  anthTool.InputSchema,
-			},
-		})
-	}
-	return openTools
-}
 
 // ModelInfo returns the downstream and upstream model names for logging.
 func (h *MessagesHandler) ModelInfo() (downstreamModel string, upstreamModel string) {

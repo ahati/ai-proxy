@@ -9,9 +9,7 @@ import (
 	"strings"
 
 	"ai-proxy/api/pipeline"
-	"ai-proxy/capture"
 	"ai-proxy/config"
-	"ai-proxy/convert"
 	"ai-proxy/router"
 	"ai-proxy/transform"
 	"ai-proxy/types"
@@ -151,41 +149,18 @@ func (h *ResponsesHandler) TransformRequest(ctx context.Context, body []byte) ([
 		return nil, fmt.Errorf("route not resolved")
 	}
 
-	// Update model in request to the resolved model
-	var req map[string]interface{}
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, fmt.Errorf("failed to parse request: %w", err)
-	}
-	req["model"] = h.route.Model
-	updatedBody, err := json.Marshal(req)
+	t, err := pipeline.BuildRequestPipeline(pipeline.RequestConfig{
+		DownstreamFormat: "responses",
+		UpstreamFormat:   h.route.OutputProtocol,
+		ResolvedModel:    h.route.Model,
+		IsPassthrough:    h.route.IsPassthrough,
+		ReasoningSplit:   h.route.ReasoningSplit,
+		Store:            h.shouldStore,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal updated request: %w", err)
+		return nil, err
 	}
-
-	// Passthrough optimization - no transformation needed
-	if h.route.IsPassthrough {
-		return updatedBody, nil
-	}
-
-	switch h.route.OutputProtocol {
-	case "openai":
-		// Convert ResponsesRequest to ChatCompletionRequest
-		converter := convert.NewResponsesToChatConverter()
-		converter.SetReasoningSplit(h.route.ReasoningSplit)
-		converter.SetStore(h.shouldStore)
-		result, err := converter.Convert(updatedBody)
-		if err == nil && converter.CacheHit() {
-			capture.SetCacheHit(ctx)
-		}
-		return result, err
-	case "anthropic":
-		// Convert ResponsesRequest to Anthropic MessageRequest
-		result, err := convert.TransformResponsesToAnthropicWithOptions(updatedBody, ctx, h.shouldStore)
-		return result, err
-	default:
-		// Unknown protocol - pass through as-is
-		return updatedBody, nil
-	}
+	return t(ctx, body)
 }
 
 // UpstreamURL returns the upstream API URL based on the resolved provider.

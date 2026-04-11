@@ -9,7 +9,6 @@ import (
 
 	"ai-proxy/api/pipeline"
 	"ai-proxy/config"
-	"ai-proxy/convert"
 	"ai-proxy/router"
 	"ai-proxy/transform"
 	"ai-proxy/transform/toolcall"
@@ -97,7 +96,7 @@ func (h *CompletionsHandler) ValidateRequest(body []byte) error {
 // For OpenAI providers: passes through without transformation, adding stream_options.
 // For Anthropic providers: converts OpenAI Chat Completions to Anthropic Messages.
 //
-// @param ctx - Context for the request (unused in this handler).
+// @param ctx - Context for the request (passed to pipeline for cache status tracking).
 // @param body - Raw request body in OpenAI ChatCompletion format.
 // @return Transformed body in the appropriate upstream format.
 // @return Error if transformation fails.
@@ -107,53 +106,17 @@ func (h *CompletionsHandler) TransformRequest(ctx context.Context, body []byte) 
 		return body, nil
 	}
 
-	// Update model in request to the resolved model
-	var req map[string]interface{}
-	if err := json.Unmarshal(body, &req); err != nil {
+	t, err := pipeline.BuildRequestPipeline(pipeline.RequestConfig{
+		DownstreamFormat: "openai",
+		UpstreamFormat:   h.route.OutputProtocol,
+		ResolvedModel:    h.route.Model,
+		IsPassthrough:    h.route.IsPassthrough,
+		ReasoningSplit:   h.route.ReasoningSplit,
+	})
+	if err != nil {
 		return body, nil
 	}
-	req["model"] = h.route.Model
-
-	// Passthrough optimization - no transformation needed
-	if h.route.IsPassthrough {
-		return json.Marshal(req)
-	}
-
-	switch h.route.OutputProtocol {
-	case "anthropic":
-		// Convert OpenAI ChatCompletionRequest to Anthropic MessageRequest
-		updatedBody, err := json.Marshal(req)
-		if err != nil {
-			return nil, err
-		}
-		converter := convert.NewChatToAnthropicConverter()
-		return converter.Convert(updatedBody)
-	case "openai":
-		// Add stream_options.include_usage for usage statistics in streaming
-		if stream, ok := req["stream"].(bool); !ok || stream {
-			req["stream"] = true
-			req["stream_options"] = map[string]interface{}{
-				"include_usage": true,
-			}
-		}
-
-		// Inject reasoning_split if configured
-		if h.route.ReasoningSplit {
-			req["reasoning_split"] = true
-		}
-
-		return json.Marshal(req)
-	case "responses":
-		// Convert Chat Completions to Responses API format
-		updatedBody, err := json.Marshal(req)
-		if err != nil {
-			return nil, err
-		}
-		return convert.TransformChatToResponses(updatedBody)
-	default:
-		// Unknown protocol - pass through as-is
-		return json.Marshal(req)
-	}
+	return t(ctx, body)
 }
 
 // UpstreamURL returns the upstream API URL based on the resolved provider.

@@ -56,6 +56,20 @@ go vet ./...        # Lint
 
 *Tool call norm only when `kimi_tool_call_transform: true` or `glm5_tool_call_transform: true`
 
+### Request/Response Pipeline Pattern
+
+The proxy uses a **declarative pipeline pattern** for both request and response transformations:
+
+1. **Request Pipeline** (`api/pipeline/request.go`): One-shot JSON transformations before upstream calls
+   - Configuration-driven step selection (DownstreamFormat × UpstreamFormat matrix)
+   - Composable step functions (model update, format conversion, web search normalization)
+   - Steps chain sequentially with proper error propagation
+   - Handlers call `BuildRequestPipeline()` to get a transformation function
+
+2. **Response Pipeline** (`api/pipeline/streaming.go`): SSE stream transformations for downstream responses
+   - Similar declarative builder pattern for streaming transformations
+   - Handles tool call normalization and format-specific SSE events
+
 ## Tool Call Transformations
 
 ### Kimi K2.5/K2

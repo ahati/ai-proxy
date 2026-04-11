@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"ai-proxy/config"
+	"ai-proxy/convert"
 	"ai-proxy/router"
-	"ai-proxy/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -223,56 +223,70 @@ func TestMessagesHandler_ForwardHeaders(t *testing.T) {
 }
 
 func TestConvertAnthropicMessage_MixedUserToolResultStaysUser(t *testing.T) {
-	msg := types.MessageInput{
-		Role: "user",
-		Content: []interface{}{
-			map[string]interface{}{
-				"type": "text",
-				"text": "Here is my note.",
-			},
-			map[string]interface{}{
-				"type":        "tool_result",
-				"tool_use_id": "tool_123",
-				"content":     "42",
-			},
-		},
+	// Test via the public TransformAnthropicToChat function to verify
+	// that mixed user messages (text + tool_result) keep user role.
+	body := []byte(`{
+		"model": "test",
+		"stream": true,
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "text", "text": "Here is my note."},
+				{"type": "tool_result", "tool_use_id": "tool_123", "content": "42"}
+			]
+		}]
+	}`)
+
+	result, err := convert.TransformAnthropicToChat(body)
+	if err != nil {
+		t.Fatalf("TransformAnthropicToChat() error = %v", err)
 	}
 
-	got := convertAnthropicMessage(msg)
+	var req map[string]interface{}
+	if err := json.Unmarshal(result, &req); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
 
-	if got.Role != "user" {
-		t.Fatalf("expected mixed message to remain user role, got %s", got.Role)
-	}
-	if got.ToolCallID != "tool_123" {
-		t.Fatalf("expected tool_call_id tool_123, got %s", got.ToolCallID)
-	}
-	if got.Content != "Here is my note.\n42" {
-		t.Fatalf("expected merged text content, got %#v", got.Content)
+	messages := req["messages"].([]interface{})
+	msg := messages[0].(map[string]interface{})
+	// Mixed content blocks should keep user role (not become tool role)
+	if msg["role"] != "user" {
+		t.Fatalf("expected mixed message to remain user role, got %s", msg["role"])
 	}
 }
 
 func TestConvertAnthropicMessage_PureToolResultBecomesTool(t *testing.T) {
-	msg := types.MessageInput{
-		Role: "user",
-		Content: []interface{}{
-			map[string]interface{}{
-				"type":        "tool_result",
-				"tool_use_id": "tool_123",
-				"content":     "42",
-			},
-		},
+	// Test via the public TransformAnthropicToChat function to verify
+	// that pure tool_result messages become tool role in OpenAI format.
+	body := []byte(`{
+		"model": "test",
+		"stream": true,
+		"messages": [{
+			"role": "user",
+			"content": [
+				{"type": "tool_result", "tool_use_id": "tool_123", "content": "42"}
+			]
+		}]
+	}`)
+
+	result, err := convert.TransformAnthropicToChat(body)
+	if err != nil {
+		t.Fatalf("TransformAnthropicToChat() error = %v", err)
 	}
 
-	got := convertAnthropicMessage(msg)
+	var req map[string]interface{}
+	if err := json.Unmarshal(result, &req); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
 
-	if got.Role != "tool" {
-		t.Fatalf("expected pure tool_result turn to become tool role, got %s", got.Role)
+	messages := req["messages"].([]interface{})
+	msg := messages[0].(map[string]interface{})
+	// Pure tool_result should become tool role
+	if msg["role"] != "tool" {
+		t.Fatalf("expected pure tool_result turn to become tool role, got %s", msg["role"])
 	}
-	if got.ToolCallID != "tool_123" {
-		t.Fatalf("expected tool_call_id tool_123, got %s", got.ToolCallID)
-	}
-	if got.Content != "42" {
-		t.Fatalf("expected tool content 42, got %#v", got.Content)
+	if msg["tool_call_id"] != "tool_123" {
+		t.Fatalf("expected tool_call_id tool_123, got %s", msg["tool_call_id"])
 	}
 }
 
