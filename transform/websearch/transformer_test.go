@@ -85,7 +85,7 @@ func TestTransformWebSearchInterception_ToolUse(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{
 		results: []types.WebSearchResult{
-			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Test content"},
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com"},
 		},
 	}
 	tr := NewTransformer(mockBase, mockSvc)
@@ -138,7 +138,7 @@ func TestTransformWebSearchInterception_ServerToolUse(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{
 		results: []types.WebSearchResult{
-			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Test content"},
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com"},
 		},
 	}
 	tr := NewTransformer(mockBase, mockSvc)
@@ -246,7 +246,7 @@ func TestMultipleWebSearchBlocks(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{
 		results: []types.WebSearchResult{
-			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Content"},
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com"},
 		},
 	}
 	tr := NewTransformer(mockBase, mockSvc)
@@ -323,7 +323,7 @@ func TestEmitWebSearchResultSchema(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{
 		results: []types.WebSearchResult{
-			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Test content"},
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com"},
 		},
 	}
 	tr := NewTransformer(mockBase, mockSvc)
@@ -397,12 +397,12 @@ func TestEmitWebSearchResultSchema(t *testing.T) {
 
 	result := eventData.ContentBlock.Content[0]
 
-	// Verify Anthropic schema: should have encrypted_content, NOT content
-	if _, hasContent := result["content"]; hasContent {
-		t.Error("result should NOT have 'content' field, should use 'encrypted_content' instead")
+	// Verify result schema: should have title and url fields
+	if result["title"] != "Test" {
+		t.Errorf("expected title 'Test', got %v", result["title"])
 	}
-	if encContent, ok := result["encrypted_content"].(string); !ok || encContent != "Test content" {
-		t.Errorf("expected encrypted_content='Test content', got %v", result["encrypted_content"])
+	if result["url"] != "https://example.com" {
+		t.Errorf("expected url 'https://example.com', got %v", result["url"])
 	}
 	if result["type"] != "web_search_result" {
 		t.Errorf("expected type web_search_result, got %v", result["type"])

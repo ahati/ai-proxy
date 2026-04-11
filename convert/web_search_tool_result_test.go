@@ -55,7 +55,7 @@ func TestNormalizeWebSearchToolResultsInMessages(t *testing.T) {
 			wantType: "text",
 		},
 		{
-			name: "converts web_search_tool_result with encrypted_content to tool_result",
+			name: "converts web_search_tool_result to tool_result",
 			input: `{
 				"model": "test",
 				"messages": [{
@@ -64,7 +64,7 @@ func TestNormalizeWebSearchToolResultsInMessages(t *testing.T) {
 						"type": "web_search_tool_result",
 						"tool_use_id": "toolu_456",
 						"content": [
-							{"type": "web_search_result", "title": "Test", "url": "https://example.com", "encrypted_content": "Some content"}
+							{"type": "web_search_result", "title": "Test", "url": "https://example.com"}
 						]
 					}]
 				}]
@@ -112,31 +112,6 @@ func TestConvertWebSearchContentToText(t *testing.T) {
 				},
 			},
 			contains: "## Test Title",
-		},
-		{
-			name: "converts web_search_result with encrypted_content",
-			input: []interface{}{
-				map[string]interface{}{
-					"type":              "web_search_result",
-					"title":             "Encrypted Title",
-					"url":               "https://example.com/enc",
-					"encrypted_content": "Decrypted page content here",
-				},
-			},
-			contains: "## Encrypted Title",
-		},
-		{
-			name: "prefers encrypted_content over content",
-			input: []interface{}{
-				map[string]interface{}{
-					"type":              "web_search_result",
-					"title":             "Both Fields",
-					"url":               "https://example.com/both",
-					"encrypted_content": "from encrypted",
-					"content":           "from plain",
-				},
-			},
-			contains: "from encrypted",
 		},
 		{
 			name:     "returns string as-is",

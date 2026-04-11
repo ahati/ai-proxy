@@ -38,13 +38,11 @@ type WebSearchToolResult struct {
 
 // WebSearchResult represents a single search result.
 type WebSearchResult struct {
-	Type             string `json:"type"` // "web_search_result" or "web_search_error"
-	Title            string `json:"title,omitempty"`
-	URL              string `json:"url,omitempty"`
-	EncryptedContent string `json:"encrypted_content,omitempty"` // For Anthropic compatibility
-	Content          string `json:"content,omitempty"`           // Plain content
-	ErrorCode        string `json:"error_code,omitempty"`        // For error type
-	Message          string `json:"message,omitempty"`           // For error type
+	Type      string `json:"type"` // "web_search_result" or "web_search_error"
+	Title     string `json:"title,omitempty"`
+	URL       string `json:"url,omitempty"`
+	ErrorCode string `json:"error_code,omitempty"` // For error type
+	Message   string `json:"message,omitempty"`   // For error type
 }
 
 // WebSearchTool defines the web search tool for API requests.

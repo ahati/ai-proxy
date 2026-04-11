@@ -94,7 +94,7 @@ func NewCaptureContext(r *http.Request) *CaptureContext {
 	// Extract session ID from header - check all possible case variations
 	sessionID := ""
 	for key, values := range r.Header {
-		if strings.EqualFold(key, "Session_id") || strings.EqualFold(key, "X-Session-ID") {
+		if strings.EqualFold(key, "Session_id") || strings.EqualFold(key, "X-Session-ID") || strings.EqualFold(key, "X-Claude-Code-Session-Id") {
 			if len(values) > 0 {
 				sessionID = values[0]
 				break

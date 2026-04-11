@@ -78,8 +78,6 @@ func NormalizeWebSearchToolResultsInMessages(body []byte) []byte {
 //   - type: "web_search_result"
 //   - title: page title
 //   - url: page URL
-//   - encrypted_content: encrypted page content (Anthropic native)
-//   - content: plain page content (legacy proxy format)
 func ConvertWebSearchContentToText(content interface{}) interface{} {
 	if content == nil {
 		return nil
@@ -112,11 +110,6 @@ func formatWebSearchResultBlock(b map[string]interface{}) string {
 	case "web_search_result":
 		title, _ := b["title"].(string)
 		url, _ := b["url"].(string)
-		// Check encrypted_content (Anthropic native) first, then fall back to content (legacy)
-		contentText, _ := b["encrypted_content"].(string)
-		if contentText == "" {
-			contentText, _ = b["content"].(string)
-		}
 
 		var part string
 		if title != "" {
@@ -124,9 +117,6 @@ func formatWebSearchResultBlock(b map[string]interface{}) string {
 		}
 		if url != "" {
 			part += "URL: " + url + "\n"
-		}
-		if contentText != "" {
-			part += contentText
 		}
 		return part
 
