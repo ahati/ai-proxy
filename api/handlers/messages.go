@@ -124,6 +124,14 @@ func (h *MessagesHandler) TransformRequest(ctx context.Context, body []byte) ([]
 		return nil, fmt.Errorf("failed to marshal updated request: %w", err)
 	}
 
+	// Convert web_search_20250305 server tools to regular function tools for
+	// non-Anthropic providers that don't understand server-side web search.
+	// This allows the model to emit tool_use blocks that the proxy's web search
+	// transformer can intercept and execute.
+	if websearch.GetDefaultAdapter() != nil && websearch.GetDefaultAdapter().IsEnabled() {
+		updatedBody = convert.ConvertServerWebSearchToFunctionTool(updatedBody)
+	}
+
 	// Passthrough optimization - normalize web_search_tool_result for upstream compatibility
 	// Web search is handled internally, so we must always normalize even in passthrough mode
 	if h.route.IsPassthrough {

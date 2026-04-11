@@ -160,11 +160,11 @@ func TestWebSearchHandler_ReloadService_Brave(t *testing.T) {
 		Providers: []config.Provider{{Name: "test"}},
 		Models:    map[string]config.ModelConfig{},
 		WebSearch: types.WebSearchConfig{
-			Enabled:      true,
-			Provider:     "brave",
-			BraveAPIKey:  "test-brave-key",
-			MaxResults:   5,
-			Timeout:      10,
+			Enabled:     true,
+			Provider:    "brave",
+			BraveAPIKey: "test-brave-key",
+			MaxResults:  5,
+			Timeout:     10,
 		},
 	}
 	mgr := config.NewManager(schema, "")

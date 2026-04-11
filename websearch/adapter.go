@@ -66,10 +66,10 @@ func (a *TransformerAdapter) ExecuteSearch(ctx context.Context, query string, al
 	output := make([]types.WebSearchResult, len(results.Results))
 	for i, r := range results.Results {
 		output[i] = types.WebSearchResult{
-			Type:    "web_search_result",
-			Title:   r.Title,
-			URL:     r.URL,
-			Content: r.Content,
+			Type:             "web_search_result",
+			Title:            r.Title,
+			URL:              r.URL,
+			EncryptedContent: r.Content,
 		}
 	}
 	return output, nil

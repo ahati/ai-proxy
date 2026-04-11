@@ -2,6 +2,7 @@ package websearch
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/tmaxmax/go-sse"
@@ -84,7 +85,7 @@ func TestTransformWebSearchInterception_ToolUse(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{
 		results: []types.WebSearchResult{
-			{Type: "web_search_result", Title: "Test", URL: "https://example.com", Content: "Test content"},
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Test content"},
 		},
 	}
 	tr := NewTransformer(mockBase, mockSvc)
@@ -137,7 +138,7 @@ func TestTransformWebSearchInterception_ServerToolUse(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{
 		results: []types.WebSearchResult{
-			{Type: "web_search_result", Title: "Test", URL: "https://example.com", Content: "Test content"},
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Test content"},
 		},
 	}
 	tr := NewTransformer(mockBase, mockSvc)
@@ -245,7 +246,7 @@ func TestMultipleWebSearchBlocks(t *testing.T) {
 	mockBase := &mockBaseTransformer{}
 	mockSvc := &mockService{
 		results: []types.WebSearchResult{
-			{Type: "web_search_result", Title: "Test", URL: "https://example.com", Content: "Content"},
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Content"},
 		},
 	}
 	tr := NewTransformer(mockBase, mockSvc)
@@ -315,5 +316,101 @@ func TestCloseCleanup(t *testing.T) {
 	}
 	if len(tr.indexToID) != 0 {
 		t.Errorf("indexToID not cleaned up")
+	}
+}
+
+func TestEmitWebSearchResultSchema(t *testing.T) {
+	mockBase := &mockBaseTransformer{}
+	mockSvc := &mockService{
+		results: []types.WebSearchResult{
+			{Type: "web_search_result", Title: "Test", URL: "https://example.com", EncryptedContent: "Test content"},
+		},
+	}
+	tr := NewTransformer(mockBase, mockSvc)
+
+	// Trigger the full flow
+	startEvent := &sse.Event{
+		Type: "content_block_start",
+		Data: `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_schema_test","name":"web_search"}}`,
+	}
+	tr.Transform(startEvent)
+
+	deltaEvent := &sse.Event{
+		Type: "content_block_delta",
+		Data: `{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"test\"}"}}`,
+	}
+	tr.Transform(deltaEvent)
+
+	stopEvent := &sse.Event{
+		Type: "content_block_stop",
+		Data: `{"type":"content_block_stop","index":0}`,
+	}
+	err := tr.Transform(stopEvent)
+	if err != nil {
+		t.Fatalf("Transform failed: %v", err)
+	}
+
+	// Find the web_search_tool_result event in the emitted events
+	// It should be the second-to-last event (content_block_start) followed by content_block_stop
+	var resultEvent *sse.Event
+	for _, e := range mockBase.events {
+		if e.Data != "" {
+			var d map[string]interface{}
+			if json.Unmarshal([]byte(e.Data), &d) == nil {
+				if cb, ok := d["content_block"].(map[string]interface{}); ok {
+					if cb["type"] == "web_search_tool_result" {
+						resultEvent = e
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if resultEvent == nil {
+		t.Fatal("web_search_tool_result event not found in emitted events")
+	}
+
+	var eventData struct {
+		Type         string `json:"type"`
+		Index        int    `json:"index"`
+		ContentBlock struct {
+			Type      string                   `json:"type"`
+			ToolUseID string                   `json:"tool_use_id"`
+			Content   []map[string]interface{} `json:"content"`
+		} `json:"content_block"`
+	}
+	if err := json.Unmarshal([]byte(resultEvent.Data), &eventData); err != nil {
+		t.Fatalf("Failed to parse result event: %v", err)
+	}
+
+	// Verify structure
+	if eventData.ContentBlock.Type != "web_search_tool_result" {
+		t.Errorf("expected content_block type web_search_tool_result, got %s", eventData.ContentBlock.Type)
+	}
+	if eventData.ContentBlock.ToolUseID != "toolu_schema_test" {
+		t.Errorf("expected tool_use_id toolu_schema_test, got %s", eventData.ContentBlock.ToolUseID)
+	}
+	if len(eventData.ContentBlock.Content) != 1 {
+		t.Fatalf("expected 1 content item, got %d", len(eventData.ContentBlock.Content))
+	}
+
+	result := eventData.ContentBlock.Content[0]
+
+	// Verify Anthropic schema: should have encrypted_content, NOT content
+	if _, hasContent := result["content"]; hasContent {
+		t.Error("result should NOT have 'content' field, should use 'encrypted_content' instead")
+	}
+	if encContent, ok := result["encrypted_content"].(string); !ok || encContent != "Test content" {
+		t.Errorf("expected encrypted_content='Test content', got %v", result["encrypted_content"])
+	}
+	if result["type"] != "web_search_result" {
+		t.Errorf("expected type web_search_result, got %v", result["type"])
+	}
+	if result["title"] != "Test" {
+		t.Errorf("expected title 'Test', got %v", result["title"])
+	}
+	if result["url"] != "https://example.com" {
+		t.Errorf("expected url 'https://example.com', got %v", result["url"])
 	}
 }

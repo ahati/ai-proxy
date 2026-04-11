@@ -49,9 +49,9 @@ func TestRecorder_GetUpstreamResponseRecorder_PreservesHeaders(t *testing.T) {
 
 	// Initialize with headers
 	headers := http.Header{
-		"Content-Type":        []string{"application/json"},
-		"X-Custom-Header":     []string{"custom-value"},
-		"Authorization":       []string{"Bearer secret-token"}, // Should be sanitized
+		"Content-Type":    []string{"application/json"},
+		"X-Custom-Header": []string{"custom-value"},
+		"Authorization":   []string{"Bearer secret-token"}, // Should be sanitized
 	}
 	r.RecordUpstreamResponse(200, headers)
 
