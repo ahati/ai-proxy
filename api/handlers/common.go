@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -194,32 +195,49 @@ func readBody(c *gin.Context) ([]byte, error) {
 	return io.ReadAll(c.Request.Body)
 }
 
-func proxyRequest(c *gin.Context, h Handler, body []byte, originalBody []byte) {
-	// Resolve API key for upstream authentication
+// upstreamResult holds the prepared upstream client, request, and metadata.
+// Returned by prepareUpstreamRequest for use by the proxy pipeline.
+//
+// @note Caller must invoke cleanup() when done to release connection resources.
+type upstreamResult struct {
+	client    upstreamClient
+	req       *http.Request
+	streaming bool
+}
+
+// prepareUpstreamRequest resolves API credentials, creates the upstream HTTP client,
+// builds the request with appropriate headers, and determines streaming mode.
+//
+// This consolidates client setup, request building, and header configuration into
+// a single preparation step, keeping the orchestrator free of infrastructure details.
+//
+// @param c - Gin context for the current request.
+// @param h - Handler providing upstream URL, API key, and header forwarding.
+// @param body - Transformed request body to send upstream.
+// @param originalBody - Original (pre-transform) body used to determine streaming mode.
+// @return Prepared upstream result, cleanup function, or error if setup fails.
+//
+// @pre h != nil, body contains valid upstream-format JSON.
+// @post On success, result.req has all headers set and is ready to execute.
+// @post cleanup() must be called to release the upstream client connection pool.
+func prepareUpstreamRequest(
+	c *gin.Context, h Handler, body []byte, originalBody []byte,
+) (*upstreamResult, func(), error) {
 	apiKey := h.ResolveAPIKey(c)
 
-	// Create HTTP client configured for upstream endpoint
-
-	// Log request with model info for debugging
 	downstreamModel, upstreamModel := h.ModelInfo()
-	logging.InfoMsg("Sending request to upstream: %s (downstream_model=%s, upstream_model=%s)", h.UpstreamURL(), downstreamModel, upstreamModel)
-	client := newUpstreamClient(h.UpstreamURL(), apiKey)
-	// Ensure connection resources are released when done
-	defer client.Close()
+	logging.InfoMsg("Sending request to upstream: %s (downstream_model=%s, upstream_model=%s)",
+		h.UpstreamURL(), downstreamModel, upstreamModel)
 
-	// Build the upstream HTTP request
+	client := newUpstreamClient(h.UpstreamURL(), apiKey)
+
 	req, err := client.BuildRequest(c.Request.Context(), body)
 	if err != nil {
-		// Request build failure indicates internal error
-		h.WriteError(c, http.StatusInternalServerError, "Failed to create upstream request")
-		return
+		client.Close()
+		return nil, func() {}, err
 	}
 
-	// Determine streaming mode once; used for both header selection and path branching.
 	streaming := isStreamingRequest(originalBody)
-
-	// Set headers based on streaming mode and forward custom headers.
-	// Both paths apply headers here for consistency.
 	if streaming {
 		client.SetHeaders(req)
 	} else {
@@ -227,97 +245,205 @@ func proxyRequest(c *gin.Context, h Handler, body []byte, originalBody []byte) {
 	}
 	h.ForwardHeaders(c, req)
 
-	// Branch: non-streaming (stream:false) uses a simple JSON response path.
-	// Streaming (stream:true or absent) uses the SSE pipeline below.
-	if !streaming {
-		proxyJSONRequest(c, h, client, req)
-		return
+	result := &upstreamResult{
+		client:    client,
+		req:       req,
+		streaming: streaming,
+	}
+	cleanup := func() { client.Close() }
+
+	return result, cleanup, nil
+}
+
+// executeUpstream sends the request to the upstream API and validates the response.
+// On error, it writes an appropriate error response to the client via the handler.
+//
+// This eliminates duplication of the Do → status check → handleUpstreamError pattern
+// between the streaming and non-streaming code paths.
+//
+// @param c - Gin context for writing error responses.
+// @param h - Handler for formatting error responses.
+// @param client - Configured upstream HTTP client.
+// @param req - Fully prepared upstream request with headers set.
+// @return Upstream HTTP response on success, or error with response already written.
+//
+// @pre req has all headers set and body populated.
+// @post On success, caller must close resp.Body. On error, response is already written.
+func executeUpstream(c *gin.Context, h Handler, client upstreamClient, req *http.Request) (*http.Response, error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		// Upstream connection failure indicates gateway error
+		h.WriteError(c, http.StatusBadGateway, "Upstream request failed")
+		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
 
-	// Check if capture is enabled and route to appropriate streaming method.
-	// Capture context is attached by CaptureMiddleware if capture is enabled.
+	if resp.StatusCode != http.StatusOK {
+		handleUpstreamError(c, resp)
+		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
+	}
+
+	return resp, nil
+}
+
+// streamingPipeline holds the initialized transformer and manages its lifecycle,
+// including capture context coordination and stream cancellation registration.
+//
+// The pipeline consolidates three previously-scattered concerns:
+//   - Transformer creation and initialization (capture vs non-capture)
+//   - Stream cancellation registration with the global registry
+//   - Resource cleanup via a single cleanup function
+//
+// @note cleanup() must be called when the pipeline is no longer needed.
+type streamingPipeline struct {
+	transformer transform.SSETransformer
+	cc          *capture.CaptureContext
+}
+
+// initStreamingPipeline creates and initializes the streaming pipeline.
+//
+// Behavior depends on capture mode:
+//   - Capture mode (cc != nil): records upstream request metadata; transformer
+//     initialization is deferred to the streaming phase inside c.Stream.
+//   - Non-capture mode: creates, configures, and initializes the transformer
+//     immediately, and registers it for cancellation if it exposes a response ID.
+//
+// @param c - Gin context for the current request.
+// @param h - Handler providing transformer creation.
+// @param req - Upstream request (used to record headers in capture mode).
+// @return Initialized pipeline, cleanup function, or error if setup fails.
+//
+// @pre The request headers have been fully set (SetHeaders + ForwardHeaders called).
+// @post cleanup() will close transformer, unregister from stream registry, and cancel context.
+func initStreamingPipeline(
+	c *gin.Context, h Handler, req *http.Request,
+) (*streamingPipeline, func(), error) {
 	cc := capture.GetCaptureContext(c.Request.Context())
+	pipeline := &streamingPipeline{cc: cc}
 
-	// Set up SSE stream headers before creating transformer and making upstream request
-	setStreamHeaders(c)
-
-	// Create and initialize transformer BEFORE upstream request
-	// This ensures response.created is emitted before any upstream response
-	var transformer transform.SSETransformer
 	var responseID string
+	var transformerCleanup func()
 
 	if cc != nil {
 		// Record upstream request headers and body for capture now that all headers are set.
-		// This must happen after both SetHeaders and ForwardHeaders to capture the complete header set.
+		// This must happen after both SetHeaders and ForwardHeaders to capture the complete set.
 		var body []byte
 		if cc.Recorder.Data().UpstreamRequest != nil {
 			body = cc.Recorder.Data().UpstreamRequest.Body
 		}
 		cc.Recorder.RecordUpstreamRequest(req.Header, body)
 
-		// For capture mode, transformer is created inside c.Stream
-		// We'll initialize it there before reading from upstream
-		transformer = nil
+		// Transformer is nil for capture mode; created inside c.Stream callback.
+		transformerCleanup = func() {}
 	} else {
-		// Create transformer without capture wrapper
-		transformer = h.CreateTransformer(c.Writer)
-		// Set context for cache status tracking
+		transformer := h.CreateTransformer(c.Writer)
 		setContextOnTransformer(transformer, c.Request.Context())
-		// Initialize transformer and emit response.created before upstream call
+
 		if err := transformer.Initialize(); err != nil {
 			logging.ErrorMsg("Failed to initialize transformer: %v", err)
-			h.WriteError(c, http.StatusInternalServerError, "Failed to initialize response stream")
-			return
+			return nil, func() {}, fmt.Errorf("transformer initialization failed: %w", err)
 		}
-		defer transformer.Close()
 
-		// Get response ID for stream cancellation registration
+		pipeline.transformer = transformer
+
 		if getter, ok := transformer.(transform.ResponseIDGetter); ok {
 			responseID = getter.GetResponseID()
 		}
+
+		transformerCleanup = func() { transformer.Close() }
 	}
 
 	// Register stream for cancellation support if we have a response ID
 	var cancel context.CancelFunc
+	var registryCleanup func()
+
 	if responseID != "" {
 		registry := GetGlobalRegistry()
 		var streamCtx context.Context
 		streamCtx, cancel = context.WithCancel(c.Request.Context())
 		c.Request = c.Request.WithContext(streamCtx)
-		registry.Register(responseID, cancel, transformer)
-		defer func() {
+		registry.Register(responseID, cancel, pipeline.transformer)
+		registryCleanup = func() {
 			registry.Remove(responseID)
 			if cancel != nil {
 				cancel()
 			}
-		}()
-	}
-
-	// Execute the upstream request
-	resp, err := client.Do(req)
-	if err != nil {
-		// Upstream connection failure indicates gateway error
-		h.WriteError(c, http.StatusBadGateway, "Upstream request failed")
-		return
-	}
-
-	// Check for non-200 responses from upstream
-	// Non-OK status indicates upstream error (auth, rate limit, etc.)
-	if resp.StatusCode != http.StatusOK {
-		handleUpstreamError(c, resp)
-		return
-	}
-
-	if cc != nil {
-		// Stream with capture when capture is enabled
-		// Transformer is created and initialized inside streamWithCapture
-		streamWithCapture(c, resp.Body, h, cc)
+		}
 	} else {
-		// Stream without capture for lower latency
-		// Transformer is already initialized, just stream events
-		streamWithInitializedTransformer(c, resp.Body, transformer)
+		registryCleanup = func() {}
+	}
+
+	cleanup := func() {
+		transformerCleanup()
+		registryCleanup()
+	}
+
+	return pipeline, cleanup, nil
+}
+
+// stream dispatches to the appropriate streaming method based on capture mode.
+//
+// @param c - Gin context for writing the response.
+// @param h - Handler providing transformer creation for capture mode.
+// @param body - Reader for the upstream SSE response body.
+func (p *streamingPipeline) stream(c *gin.Context, body io.Reader, h Handler) {
+	if p.cc != nil {
+		streamWithCapture(c, body, h, p.cc)
+	} else {
+		streamWithInitializedTransformer(c, body, p.transformer)
 	}
 }
+
+// proxyRequest orchestrates the full upstream proxy flow: preparing the request,
+// executing it, and streaming or returning the response.
+//
+// The function is a thin coordinator that delegates to focused helpers:
+//   - prepareUpstreamRequest: client setup, request building, header configuration
+//   - executeUpstream: HTTP execution with error handling (shared with non-streaming path)
+//   - initStreamingPipeline: transformer lifecycle, capture, and cancellation
+//
+// @param c - Gin context for the current request.
+// @param h - Handler defining endpoint-specific behavior.
+// @param body - Transformed request body in upstream format.
+// @param originalBody - Original request body (used to determine streaming mode).
+//
+// @pre body has been validated and transformed by the handler.
+// @post Response is fully written to client (success, error, or streamed SSE).
+func proxyRequest(c *gin.Context, h Handler, body []byte, originalBody []byte) {
+	// Phase 1: Prepare upstream client, request, and headers
+	result, cleanup, err := prepareUpstreamRequest(c, h, body, originalBody)
+	if err != nil {
+		h.WriteError(c, http.StatusInternalServerError, "Failed to create upstream request")
+		return
+	}
+	defer cleanup()
+
+	// Phase 2: Non-streaming path — simple JSON proxy
+	if !result.streaming {
+		proxyJSONRequest(c, h, result.client, result.req)
+		return
+	}
+
+	// Phase 3: Initialize streaming pipeline (transformer + cancellation)
+	pipeline, pipelineCleanup, err := initStreamingPipeline(c, h, result.req)
+	if err != nil {
+		h.WriteError(c, http.StatusInternalServerError, "Failed to initialize response stream")
+		return
+	}
+	defer pipelineCleanup()
+
+	// Phase 4: Execute upstream request
+	resp, err := executeUpstream(c, h, result.client, result.req)
+	if err != nil {
+		return // error already written by executeUpstream
+	}
+	defer resp.Body.Close()
+
+	// Phase 5: Configure response headers and stream to client
+	forwardResponseHeaders(c, resp)
+	setStreamHeaders(c)
+	pipeline.stream(c, resp.Body, h)
+}
+
 func setStreamHeaders(c *gin.Context) {
 	// Content-Type for Server-Sent Events
 	c.Header("Content-Type", "text/event-stream")
@@ -325,8 +451,6 @@ func setStreamHeaders(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	// Keep connection open for streaming
 	c.Header("Connection", "keep-alive")
-	// Disable nginx buffering for real-time streaming through reverse proxy
-	c.Header("X-Accel-Buffering", "no")
 }
 
 // isStreamingRequest checks the transformed request body for the "stream" field.
@@ -351,6 +475,8 @@ func isStreamingRequest(body []byte) bool {
 // It executes the upstream request and returns the plain JSON response
 // directly to the client without SSE transformation.
 //
+// Uses executeUpstream for consistent error handling with the streaming path.
+//
 // @param c - Gin context for writing the response.
 // @param h - Handler defining upstream URL, headers, and error handling.
 // @param client - Configured upstream HTTP client.
@@ -359,19 +485,14 @@ func isStreamingRequest(body []byte) bool {
 // @pre req was created by client.BuildRequest and headers set by caller.
 // @post Response is returned to client as JSON or error response is sent.
 func proxyJSONRequest(c *gin.Context, h Handler, client upstreamClient, req *http.Request) {
-	// Execute the upstream request (headers already set by caller)
-	resp, err := client.Do(req)
+	resp, err := executeUpstream(c, h, client, req)
 	if err != nil {
-		h.WriteError(c, http.StatusBadGateway, "Upstream request failed")
-		return
+		return // error already written by executeUpstream
 	}
 	defer resp.Body.Close()
 
-	// Check for non-200 responses from upstream
-	if resp.StatusCode != http.StatusOK {
-		handleUpstreamError(c, resp)
-		return
-	}
+	// Forward upstream response headers to downstream
+	forwardResponseHeaders(c, resp)
 
 	// Read the full JSON response body
 	responseBody, err := io.ReadAll(resp.Body)
@@ -410,6 +531,18 @@ func forwardCustomHeaders(c *gin.Context, req *http.Request) {
 			continue
 		}
 		req.Header[key] = values
+	}
+}
+
+// forwardResponseHeaders copies all headers from the upstream response to the
+// downstream response. Headers that the proxy needs to override (Content-Type,
+// Cache-Control, etc.) are set afterwards by setStreamHeaders or c.Data.
+//
+// @param c - Gin context for writing downstream response headers.
+// @param upstream - Upstream response whose headers to forward.
+func forwardResponseHeaders(c *gin.Context, upstream *http.Response) {
+	for key, values := range upstream.Header {
+		c.Header(key, values[0])
 	}
 }
 

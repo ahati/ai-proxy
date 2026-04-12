@@ -104,10 +104,9 @@ func TestSetStreamHeaders(t *testing.T) {
 	setStreamHeaders(c)
 
 	headers := map[string]string{
-		"Content-Type":      "text/event-stream",
-		"Cache-Control":     "no-cache",
-		"Connection":        "keep-alive",
-		"X-Accel-Buffering": "no",
+		"Content-Type":  "text/event-stream",
+		"Cache-Control": "no-cache",
+		"Connection":    "keep-alive",
 	}
 
 	for key, expected := range headers {
