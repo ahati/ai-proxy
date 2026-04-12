@@ -218,19 +218,19 @@ func TestCompletionsHandler_ForwardHeaders(t *testing.T) {
 			},
 		},
 		{
-			name: "non-X header not forwarded",
+			name: "denied header not forwarded",
 			requestHeaders: map[string]string{
 				"Authorization": "Bearer token",
 			},
 			expectedHeaders: map[string]string{},
 		},
 		{
-			name: "Extra header forwarded",
+			name: "User-Agent forwarded",
 			requestHeaders: map[string]string{
-				"Extra": "extra-value",
+				"User-Agent": "codex-tui/0.120.0",
 			},
 			expectedHeaders: map[string]string{
-				"Extra": "extra-value",
+				"User-Agent": "codex-tui/0.120.0",
 			},
 		},
 	}
@@ -286,46 +286,46 @@ func TestForwardCustomHeaders(t *testing.T) {
 	tests := []struct {
 		name            string
 		requestHeaders  map[string]string
-		prefixes        []string
 		expectedHeaders map[string]string
+		deniedHeaders   []string // headers that must NOT appear
 	}{
 		{
 			name:            "empty headers",
 			requestHeaders:  map[string]string{},
-			prefixes:        []string{"X-"},
 			expectedHeaders: map[string]string{},
 		},
 		{
-			name: "single X- header",
+			name: "X- headers forwarded",
 			requestHeaders: map[string]string{
 				"X-Custom": "value",
 			},
-			prefixes: []string{"X-"},
 			expectedHeaders: map[string]string{
 				"X-Custom": "value",
 			},
 		},
 		{
-			name: "multiple prefixes",
+			name: "User-Agent and custom headers forwarded",
 			requestHeaders: map[string]string{
-				"X-Custom": "x-value",
-				"Y-Custom": "y-value",
-				"Other":    "other-value",
+				"User-Agent": "test-agent/1.0",
+				"Originator": "codex-tui",
+				"X-Trace-Id": "abc123",
 			},
-			prefixes: []string{"X-", "Y-"},
 			expectedHeaders: map[string]string{
-				"X-Custom": "x-value",
-				"Y-Custom": "y-value",
+				"User-Agent": "test-agent/1.0",
+				"Originator": "codex-tui",
+				"X-Trace-Id": "abc123",
 			},
 		},
 		{
-			name: "no matching prefix",
+			name: "denied headers not forwarded",
 			requestHeaders: map[string]string{
 				"Authorization": "Bearer token",
-				"Content-Type":  "application/json",
+				"Content-Type":  "text/plain",
+				"Accept":        "text/html",
+				"Host":          "evil.com",
 			},
-			prefixes:        []string{"X-"},
 			expectedHeaders: map[string]string{},
+			deniedHeaders:   []string{"Authorization", "Content-Type", "Accept", "Host"},
 		},
 	}
 
@@ -339,11 +339,16 @@ func TestForwardCustomHeaders(t *testing.T) {
 			}
 
 			upstreamReq := httptest.NewRequest(http.MethodPost, "https://upstream.example.com", nil)
-			forwardCustomHeaders(c, upstreamReq, tt.prefixes...)
+			forwardCustomHeaders(c, upstreamReq)
 
 			for k, v := range tt.expectedHeaders {
 				if upstreamReq.Header.Get(k) != v {
 					t.Errorf("expected header %s = %s, got %s", k, v, upstreamReq.Header.Get(k))
+				}
+			}
+			for _, k := range tt.deniedHeaders {
+				if upstreamReq.Header.Get(k) != "" {
+					t.Errorf("denied header %s should not be forwarded, got %s", k, upstreamReq.Header.Get(k))
 				}
 			}
 		})

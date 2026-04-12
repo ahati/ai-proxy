@@ -1142,22 +1142,19 @@ func TestResponsesSource_UpstreamURL(t *testing.T) {
 	}
 }
 
-// TestResponsesSource_ForwardHeaders tests header forwarding based on OutputProtocol.
+// TestResponsesSource_ForwardHeaders tests that all non-denied headers are forwarded.
 func TestResponsesSource_ForwardHeaders(t *testing.T) {
 	tests := []struct {
-		name                   string
-		outputProtocol         string
-		expectAnthropicHeaders bool
+		name           string
+		outputProtocol string
 	}{
 		{
-			name:                   "OpenAI target - no Anthropic headers",
-			outputProtocol:         "openai",
-			expectAnthropicHeaders: false,
+			name:           "OpenAI target - all headers forwarded",
+			outputProtocol: "openai",
 		},
 		{
-			name:                   "Anthropic target - forward Anthropic headers",
-			outputProtocol:         "anthropic",
-			expectAnthropicHeaders: true,
+			name:           "Anthropic target - all headers forwarded",
+			outputProtocol: "anthropic",
 		},
 	}
 
@@ -1190,15 +1187,9 @@ func TestResponsesSource_ForwardHeaders(t *testing.T) {
 				t.Error("X-Custom header should be forwarded")
 			}
 
-			gotAnthropicVersion := upstreamReq.Header.Get("Anthropic-Version")
-			if tt.expectAnthropicHeaders {
-				if gotAnthropicVersion != "2023-06-01" {
-					t.Errorf("Anthropic-Version should be forwarded for Anthropic target, got '%s'", gotAnthropicVersion)
-				}
-			} else {
-				if gotAnthropicVersion != "" {
-					t.Errorf("Anthropic-Version should NOT be forwarded for OpenAI target, got '%s'", gotAnthropicVersion)
-				}
+			// All non-denied headers are forwarded regardless of upstream type
+			if upstreamReq.Header.Get("Anthropic-Version") != "2023-06-01" {
+				t.Errorf("Anthropic-Version should be forwarded for %s target", tt.outputProtocol)
 			}
 		})
 	}

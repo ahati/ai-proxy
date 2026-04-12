@@ -356,7 +356,6 @@ func TestResponsesHandler_ForwardHeaders_OpenAI(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
 	c.Request.Header.Set("X-Custom", "custom-value")
-	c.Request.Header.Set("Extra", "extra-value")
 	c.Request.Header.Set("Authorization", "Bearer token")
 
 	upstreamReq := httptest.NewRequest(http.MethodPost, "https://upstream.example.com", nil)
@@ -364,9 +363,6 @@ func TestResponsesHandler_ForwardHeaders_OpenAI(t *testing.T) {
 
 	if upstreamReq.Header.Get("X-Custom") != "custom-value" {
 		t.Error("X-Custom header should be forwarded")
-	}
-	if upstreamReq.Header.Get("Extra") != "extra-value" {
-		t.Error("Extra header should be forwarded")
 	}
 	if upstreamReq.Header.Get("Authorization") != "" {
 		t.Error("Authorization header should not be forwarded")

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"ai-proxy/api/pipeline"
 	"ai-proxy/config"
@@ -184,33 +183,13 @@ func (h *ResponsesHandler) ResolveAPIKey(c *gin.Context) string {
 	return h.route.Provider.GetAPIKey()
 }
 
-// ForwardHeaders copies relevant headers to the upstream request.
-// For OpenAI providers, it forwards X-* headers.
-// For Anthropic providers, it also forwards Anthropic-specific headers.
+// ForwardHeaders copies headers to the upstream request based on provider type.
+// All headers are forwarded except those in the denylist (Authorization, Content-Type, etc.).
 //
 // @param c - Gin context containing the original request headers.
 // @param req - Upstream request to receive forwarded headers.
 func (h *ResponsesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
-	if h.route == nil {
-		return
-	}
-
-	switch h.route.OutputProtocol {
-	case "openai":
-		// Forward custom headers and Extra header
-		forwardCustomHeaders(c, req, "X-")
-		req.Header.Set("Extra", c.Request.Header.Get("Extra"))
-	case "anthropic":
-		// Forward Anthropic-specific headers
-		for k, v := range c.Request.Header {
-			if strings.HasPrefix(k, "X-") || k == "Anthropic-Version" || k == "Anthropic-Beta" {
-				req.Header[k] = v
-			}
-		}
-	default:
-		// Forward X-* headers by default
-		forwardCustomHeaders(c, req, "X-")
-	}
+	forwardCustomHeaders(c, req)
 }
 
 // CreateTransformer builds an SSE transformer for converting upstream responses.

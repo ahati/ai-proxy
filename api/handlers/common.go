@@ -219,8 +219,8 @@ func proxyRequest(c *gin.Context, h Handler, body []byte) {
 	// Forward custom headers from original request
 	h.ForwardHeaders(c, req)
 
-	// Check if capture is enabled and route to appropriate streaming method
-	// Capture context is attached by CaptureMiddleware if capture is enabled
+	// Check if capture is enabled and route to appropriate streaming method.
+	// Capture context is attached by CaptureMiddleware if capture is enabled.
 	cc := capture.GetCaptureContext(c.Request.Context())
 
 	// Set up SSE stream headers before creating transformer and making upstream request
@@ -232,7 +232,15 @@ func proxyRequest(c *gin.Context, h Handler, body []byte) {
 	var responseID string
 
 	if cc != nil {
-		// For capture mode, we need special handling - transformer created inside c.Stream
+		// Record upstream request headers and body for capture now that all headers are set.
+		// This must happen after both SetHeaders and ForwardHeaders to capture the complete header set.
+		var body []byte
+		if cc.Recorder.Data().UpstreamRequest != nil {
+			body = cc.Recorder.Data().UpstreamRequest.Body
+		}
+		cc.Recorder.RecordUpstreamRequest(req.Header, body)
+
+		// For capture mode, transformer is created inside c.Stream
 		// We'll initialize it there before reading from upstream
 		transformer = nil
 	} else {
@@ -304,6 +312,35 @@ func setStreamHeaders(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	// Disable nginx buffering for real-time streaming through reverse proxy
 	c.Header("X-Accel-Buffering", "no")
+}
+
+// replacedHeaders lists headers that the proxy replaces with its own values.
+// These are set by SetHeaders and must not be overwritten by client headers.
+var replacedHeaders = map[string]bool{
+	"authorization":     true, // Replaced with proxy API key
+	"content-type":      true, // Set to application/json
+	"accept":            true, // Set to text/event-stream
+	"content-length":    true, // Set by Go from body
+	"host":              true, // Set by Go from URL
+	"connection":        true, // Hop-by-hop header
+	"keep-alive":        true, // Hop-by-hop header
+	"transfer-encoding": true, // Hop-by-hop header
+	"upgrade":           true, // Hop-by-hop header
+}
+
+// forwardCustomHeaders copies all headers from the incoming request to the upstream
+// request, except for headers that are replaced by the proxy (denylist).
+// This ensures client metadata like User-Agent passes through automatically.
+//
+// @param c - Gin context containing the original request headers.
+// @param req - Upstream request to receive forwarded headers.
+func forwardCustomHeaders(c *gin.Context, req *http.Request) {
+	for key, values := range c.Request.Header {
+		if replacedHeaders[strings.ToLower(key)] {
+			continue
+		}
+		req.Header[key] = values
+	}
 }
 
 // streamWithCapture streams the response while capturing both upstream and downstream

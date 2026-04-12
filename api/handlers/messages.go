@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	"ai-proxy/api/pipeline"
 	"ai-proxy/config"
@@ -145,32 +144,12 @@ func (h *MessagesHandler) ResolveAPIKey(c *gin.Context) string {
 }
 
 // ForwardHeaders copies headers to the upstream request based on provider type.
-// For OpenAI providers: forwards X-* headers only.
-// For Anthropic providers: forwards X-*, Anthropic-Version, and Anthropic-Beta headers.
+// All headers are forwarded except those in the denylist (Authorization, Content-Type, etc.).
 //
 // @param c - Gin context containing the original request headers.
 // @param req - Upstream request to receive forwarded headers.
 func (h *MessagesHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
-	outputProtocol := "anthropic" // default
-	if h.route != nil {
-		outputProtocol = h.route.OutputProtocol
-	}
-
-	switch outputProtocol {
-	case "openai":
-		// Forward custom headers only
-		forwardCustomHeaders(c, req, "X-")
-	case "anthropic":
-		// Forward Anthropic-specific headers
-		for k, v := range c.Request.Header {
-			if strings.HasPrefix(k, "X-") || k == "Anthropic-Version" || k == "Anthropic-Beta" {
-				req.Header[k] = v
-			}
-		}
-	default:
-		// Forward X-* headers by default
-		forwardCustomHeaders(c, req, "X-")
-	}
+	forwardCustomHeaders(c, req)
 }
 
 // CreateTransformer builds an SSE transformer for converting upstream responses.
@@ -228,7 +207,6 @@ func wrapWithWebSearch(base transform.SSETransformer) transform.SSETransformer {
 func (h *MessagesHandler) WriteError(c *gin.Context, status int, msg string) {
 	sendAnthropicError(c, status, msg)
 }
-
 
 // ModelInfo returns the downstream and upstream model names for logging.
 func (h *MessagesHandler) ModelInfo() (downstreamModel string, upstreamModel string) {

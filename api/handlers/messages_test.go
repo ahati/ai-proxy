@@ -172,7 +172,7 @@ func TestMessagesHandler_ForwardHeaders(t *testing.T) {
 			},
 		},
 		{
-			name: "non-forwarded headers ignored",
+			name: "denied headers not forwarded",
 			requestHeaders: map[string]string{
 				"Authorization": "Bearer token",
 				"Content-Type":  "application/json",

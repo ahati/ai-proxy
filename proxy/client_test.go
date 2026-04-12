@@ -119,20 +119,23 @@ func TestSetHeaders(t *testing.T) {
 }
 
 func TestSetHeaders_WithCaptureContext(t *testing.T) {
+	// SetHeaders is a pure function that only sets headers on the request.
+	// Recording to capture context is handled by the caller (proxyRequest),
+	// not by SetHeaders itself. Verify SetHeaders does not depend on capture.
 	client := NewClient("https://api.example.com", "secret-key")
-	httpReq := httptest.NewRequest("POST", "/test", nil)
-	cc := capture.NewCaptureContext(httpReq)
-	cc.Recorder.Data().UpstreamRequest = &capture.HTTPRequestCapture{}
+	cc := capture.NewCaptureContext(httptest.NewRequest("POST", "/test", nil))
 	ctx := capture.WithCaptureContext(context.Background(), cc)
 	req := httptest.NewRequest("POST", "/test", nil).WithContext(ctx)
 
 	client.SetHeaders(req)
 
-	if cc.Recorder.Data().UpstreamRequest.Headers == nil {
-		t.Error("expected headers to be recorded in capture context")
+	// SetHeaders should set headers correctly even with capture context present
+	if req.Header.Get("Authorization") != "Bearer secret-key" {
+		t.Errorf("expected Authorization 'Bearer secret-key', got %s", req.Header.Get("Authorization"))
 	}
-	if cc.Recorder.Data().UpstreamRequest.Headers["Authorization"] != "***" {
-		t.Errorf("expected Authorization to be sanitized, got %v", cc.Recorder.Data().UpstreamRequest.Headers["Authorization"])
+	// Capture recording should NOT happen inside SetHeaders (done by proxyRequest)
+	if cc.Recorder.Data().UpstreamRequest != nil {
+		t.Error("SetHeaders should not record to capture context directly")
 	}
 }
 

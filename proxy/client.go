@@ -115,31 +115,16 @@ func (c *Client) BuildRequest(ctx context.Context, body []byte) (*http.Request, 
 }
 
 // SetHeaders sets the required headers on the request including Content-Type, Authorization, and Accept headers.
-// It also records sanitized headers in the capture context if one exists.
 //
 // @param req - the HTTP request to modify
 // @pre req must not be nil
 // @post Request has Content-Type: application/json
 // @post Request has Authorization: Bearer <apiKey>
 // @post Request has Accept: text/event-stream for SSE support
-// @note Authorization header value is sanitized in capture logs
 func (c *Client) SetHeaders(req *http.Request) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Accept", "text/event-stream") // Required for streaming responses
-
-	// Record headers for debugging, sanitizing sensitive values
-	if cc := capture.GetCaptureContext(req.Context()); cc != nil {
-		// Update the existing upstream request recording with headers
-		// The body was already recorded in BuildRequest, so we pass it again
-		// to preserve it along with the headers
-		// Get the existing body from the recorder
-		var body []byte
-		if cc.Recorder.Data().UpstreamRequest != nil {
-			body = cc.Recorder.Data().UpstreamRequest.Body
-		}
-		cc.Recorder.RecordUpstreamRequest(req.Header, body)
-	}
 }
 
 // Do executes the HTTP request and returns the response.

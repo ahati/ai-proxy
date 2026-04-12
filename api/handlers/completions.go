@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 
 	"ai-proxy/api/pipeline"
 	"ai-proxy/config"
@@ -141,33 +140,12 @@ func (h *CompletionsHandler) ResolveAPIKey(c *gin.Context) string {
 }
 
 // ForwardHeaders copies headers to the upstream request based on provider type.
-// For OpenAI providers: forwards X-* headers and Extra header.
-// For Anthropic providers: forwards X-*, Anthropic-Version, and Anthropic-Beta headers.
+// All headers are forwarded except those in the denylist (Authorization, Content-Type, etc.).
 //
 // @param c - Gin context containing the original request headers.
 // @param req - Upstream request to receive forwarded headers.
 func (h *CompletionsHandler) ForwardHeaders(c *gin.Context, req *http.Request) {
-	outputProtocol := "openai" // default
-	if h.route != nil {
-		outputProtocol = h.route.OutputProtocol
-	}
-
-	switch outputProtocol {
-	case "anthropic":
-		// Forward headers that are important for Anthropic API
-		for k, v := range c.Request.Header {
-			if strings.HasPrefix(k, "X-") || k == "Anthropic-Version" || k == "Anthropic-Beta" {
-				req.Header[k] = v
-			}
-		}
-	case "openai":
-		// Forward custom headers and Extra header
-		forwardCustomHeaders(c, req, "X-")
-		req.Header.Set("Extra", c.Request.Header.Get("Extra"))
-	default:
-		// Forward X-* headers by default
-		forwardCustomHeaders(c, req, "X-")
-	}
+	forwardCustomHeaders(c, req)
 }
 
 // CreateTransformer builds an SSE transformer based on the provider type.
@@ -206,19 +184,6 @@ func (h *CompletionsHandler) CreateTransformer(w io.Writer) transform.SSETransfo
 // @param msg - Human-readable error message.
 func (h *CompletionsHandler) WriteError(c *gin.Context, status int, msg string) {
 	sendOpenAIError(c, status, msg)
-}
-
-// forwardCustomHeaders copies headers matching any of the given prefixes
-// from the incoming request to the upstream request.
-func forwardCustomHeaders(c *gin.Context, req *http.Request, prefixes ...string) {
-	for key, values := range c.Request.Header {
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(key, prefix) {
-				req.Header[key] = values
-				break
-			}
-		}
-	}
 }
 
 // ModelInfo returns the downstream and upstream model names for logging.
