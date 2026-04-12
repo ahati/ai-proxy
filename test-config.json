@@ -35,6 +35,23 @@
       },
       "default": "openai",
       "envApiKey": "ZAI_API_KEY"
+    },
+    {
+      "name": "openrouter",
+      "endpoints": {
+        "openai": "https://openrouter.ai/api/v1/chat/completions",
+        "anthropic": "https://openrouter.ai/api/v1/messages"
+      },
+      "default": "openai",
+      "apiKey": "${OPENROUTER_API_KEY}"
+    },
+    {
+      "name": "ollama",
+      "endpoints": {
+        "openai": "http://127.0.0.1:11434/v1/chat/completions"
+      },
+      "default": "openai",
+      "apiKey": "dummy"
     }
   ],
   "models": {
@@ -47,6 +64,11 @@
     "glm-5.1": {
       "provider": "z.ai",
       "model": "glm-5.1",
+      "type": "openai"
+    },
+    "glm-5-turbo": {
+      "provider": "z.ai",
+      "model": "glm-5-turbo",
       "type": "openai"
     },
     "glm-5": {
@@ -62,14 +84,12 @@
       "kimi_tool_call_transform": true
     },
     "gpt-5.4": {
-      "provider": "alibaba",
-      "model": "glm-5",
-      "kimi_tool_call_transform": false
+      "provider": "z.ai",
+      "model": "glm-5.1"
     },
     "gpt-5.3-codex": {
-      "provider": "alibaba",
-      "model": "glm-5",
-      "glm5_tool_call_transform": true
+      "provider": "z.ai",
+      "model": "glm-5.1"
     },
     "gpt-5.1-codex-mini": {
       "provider": "minimax",
@@ -129,6 +149,11 @@
     "claude-haiku-4.6": {
       "provider": "alibaba",
       "model": "MiniMax-M2.5",
+      "type": "auto"
+    },
+    "openrouter/qwen3.6-plus:free": {
+      "provider": "openrouter",
+      "model": "qwen/qwen3.6-plus:free",
       "type": "auto"
     }
   },
