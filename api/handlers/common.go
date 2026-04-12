@@ -21,6 +21,7 @@ import (
 type upstreamClient interface {
 	BuildRequest(ctx context.Context, body []byte) (*http.Request, error)
 	SetHeaders(req *http.Request)
+	SetHeadersNonStreaming(req *http.Request)
 	Do(req *http.Request) (*http.Response, error)
 	Close()
 }
@@ -176,7 +177,7 @@ func Handle(h Handler) gin.HandlerFunc {
 		}
 
 		// Step 5: Forward to upstream and stream response
-		proxyRequest(c, h, transformedBody)
+		proxyRequest(c, h, transformedBody, body)
 	}
 }
 
@@ -193,7 +194,7 @@ func readBody(c *gin.Context) ([]byte, error) {
 	return io.ReadAll(c.Request.Body)
 }
 
-func proxyRequest(c *gin.Context, h Handler, body []byte) {
+func proxyRequest(c *gin.Context, h Handler, body []byte, originalBody []byte) {
 	// Resolve API key for upstream authentication
 	apiKey := h.ResolveAPIKey(c)
 
@@ -214,10 +215,24 @@ func proxyRequest(c *gin.Context, h Handler, body []byte) {
 		return
 	}
 
-	// Set standard headers required by upstream API
-	client.SetHeaders(req)
-	// Forward custom headers from original request
+	// Determine streaming mode once; used for both header selection and path branching.
+	streaming := isStreamingRequest(originalBody)
+
+	// Set headers based on streaming mode and forward custom headers.
+	// Both paths apply headers here for consistency.
+	if streaming {
+		client.SetHeaders(req)
+	} else {
+		client.SetHeadersNonStreaming(req)
+	}
 	h.ForwardHeaders(c, req)
+
+	// Branch: non-streaming (stream:false) uses a simple JSON response path.
+	// Streaming (stream:true or absent) uses the SSE pipeline below.
+	if !streaming {
+		proxyJSONRequest(c, h, client, req)
+		return
+	}
 
 	// Check if capture is enabled and route to appropriate streaming method.
 	// Capture context is attached by CaptureMiddleware if capture is enabled.
@@ -312,6 +327,61 @@ func setStreamHeaders(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	// Disable nginx buffering for real-time streaming through reverse proxy
 	c.Header("X-Accel-Buffering", "no")
+}
+
+// isStreamingRequest checks the transformed request body for the "stream" field.
+// Returns true when streaming (default), false only when explicitly set to false.
+//
+// @param body - Transformed request body bytes (JSON).
+// @return true for streaming (default), false only when stream:false is explicit.
+func isStreamingRequest(body []byte) bool {
+	var req struct {
+		Stream *bool `json:"stream"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return true // Default to streaming on parse failure (backward compatible)
+	}
+	if req.Stream == nil {
+		return true // Default to streaming when field absent (backward compatible)
+	}
+	return *req.Stream
+}
+
+// proxyJSONRequest handles non-streaming (stream:false) requests.
+// It executes the upstream request and returns the plain JSON response
+// directly to the client without SSE transformation.
+//
+// @param c - Gin context for writing the response.
+// @param h - Handler defining upstream URL, headers, and error handling.
+// @param client - Configured upstream HTTP client.
+// @param req - Pre-built upstream HTTP request with headers already set.
+//
+// @pre req was created by client.BuildRequest and headers set by caller.
+// @post Response is returned to client as JSON or error response is sent.
+func proxyJSONRequest(c *gin.Context, h Handler, client upstreamClient, req *http.Request) {
+	// Execute the upstream request (headers already set by caller)
+	resp, err := client.Do(req)
+	if err != nil {
+		h.WriteError(c, http.StatusBadGateway, "Upstream request failed")
+		return
+	}
+	defer resp.Body.Close()
+
+	// Check for non-200 responses from upstream
+	if resp.StatusCode != http.StatusOK {
+		handleUpstreamError(c, resp)
+		return
+	}
+
+	// Read the full JSON response body
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		h.WriteError(c, http.StatusInternalServerError, "Failed to read upstream response")
+		return
+	}
+
+	// Return JSON response directly to the client
+	c.Data(resp.StatusCode, "application/json", responseBody)
 }
 
 // replacedHeaders lists headers that the proxy replaces with its own values.
@@ -418,7 +488,7 @@ func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.Ca
 	})
 
 	// Finalize capture by recording all captured data
-	finalizeCapture(cc, downstream, upstream)
+	finalizeCapture(cc, downstream, upstream, c.Writer.Header())
 }
 
 // streamWithInitializedTransformer streams events using an already-initialized transformer.
@@ -488,10 +558,11 @@ func setContextOnTransformer(transformer transform.SSETransformer, ctx context.C
 // @param cc - Capture context to finalize.
 // @param downstream - Writer containing captured downstream events.
 // @param upstream - Writer containing captured upstream events.
+// @param headers - Downstream response headers to capture.
 // @pre cc != nil and has been recording the request.
 // @post cc.Recorder contains complete downstream and upstream response data.
 // @post cc.RequestID is set if found in SSE stream.
-func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.CaptureWriter) {
+func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.CaptureWriter, headers http.Header) {
 	// Get immutable snapshots of captured chunks
 	// This is now thread-safe via atomic snapshot in Chunks()
 	downstreamChunks := downstream.Chunks()
@@ -503,7 +574,7 @@ func finalizeCapture(cc *capture.CaptureContext, downstream, upstream capture.Ca
 
 	// Record downstream response (transformed events sent to client)
 	// Use thread-safe method instead of direct field access
-	downstreamRecorder := cc.Recorder.RecordDownstreamResponse()
+	downstreamRecorder := cc.Recorder.RecordDownstreamResponse(headers)
 	// Transfer captured chunks directly, preserving their original timing
 	// The chunks already have correct OffsetMS from when they were recorded during streaming
 	for _, chunk := range downstreamChunks {
@@ -628,7 +699,7 @@ func handleUpstreamError(c *gin.Context, resp *http.Response) {
 			upstream := capture.NewCaptureWriter(cc.StartTime)
 
 			// Finalize capture to store the error response
-			finalizeCapture(cc, downstream, upstream)
+			finalizeCapture(cc, downstream, upstream, c.Writer.Header())
 		}
 	}
 

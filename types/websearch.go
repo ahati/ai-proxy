@@ -42,7 +42,7 @@ type WebSearchResult struct {
 	Title     string `json:"title,omitempty"`
 	URL       string `json:"url,omitempty"`
 	ErrorCode string `json:"error_code,omitempty"` // For error type
-	Message   string `json:"message,omitempty"`   // For error type
+	Message   string `json:"message,omitempty"`    // For error type
 }
 
 // WebSearchTool defines the web search tool for API requests.

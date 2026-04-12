@@ -465,7 +465,7 @@ func TestRecorder_RecordUpstreamResponse(t *testing.T) {
 func TestRecorder_RecordDownstreamResponse(t *testing.T) {
 	rec := NewRecorder("req-id", "POST", "/test", "localhost")
 
-	rr := rec.RecordDownstreamResponse()
+	rr := rec.RecordDownstreamResponse(nil)
 
 	if rec.data.DownstreamResponse == nil {
 		t.Fatal("DownstreamResponse should not be nil")

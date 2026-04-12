@@ -126,12 +126,12 @@ func TestBuildRequestPipeline_ModelUpdate(t *testing.T) {
 // TestBuildRequestPipeline_OpenAIDownstream tests OpenAI downstream conversions.
 func TestBuildRequestPipeline_OpenAIDownstream(t *testing.T) {
 	tests := []struct {
-		name              string
-		upstreamFormat    string
-		isPassthrough     bool
-		reasoningSplit    bool
-		body              string
-		assertFn          func(t *testing.T, result []byte)
+		name           string
+		upstreamFormat string
+		isPassthrough  bool
+		reasoningSplit bool
+		body           string
+		assertFn       func(t *testing.T, result []byte)
 	}{
 		{
 			name:           "openai_to_openai adds stream_options",

@@ -127,6 +127,20 @@ func (c *Client) SetHeaders(req *http.Request) {
 	req.Header.Set("Accept", "text/event-stream") // Required for streaming responses
 }
 
+// SetHeadersNonStreaming sets headers for a non-streaming JSON API request.
+// Use this when the client requests stream:false to get a plain JSON response.
+//
+// @param req - the HTTP request to modify
+// @pre req must not be nil
+// @post Request has Content-Type: application/json
+// @post Request has Authorization: Bearer <apiKey>
+// @post Request has Accept: application/json for non-streaming responses
+func (c *Client) SetHeadersNonStreaming(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Accept", "application/json")
+}
+
 // Do executes the HTTP request and returns the response.
 // It logs the request and captures response metadata for debugging.
 //

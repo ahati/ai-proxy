@@ -3,6 +3,7 @@ package convert
 import (
 	"ai-proxy/types"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -285,6 +286,61 @@ func TestToolChoiceHelpers(t *testing.T) {
 			got := ConvertResponsesToolChoiceToOpenAI(tt.input)
 			if !reflect.DeepEqual(got, tt.expected) {
 				t.Fatalf("got %#v, want %#v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestTransformAnthropicToChat_StreamingPreserved(t *testing.T) {
+	tests := []struct {
+		name         string
+		streamValue  interface{}
+		expectStream interface{} // true, false, or nil (absent from JSON due to omitempty)
+		expectOpts   bool
+	}{
+		{
+			name:         "stream true preserves streaming",
+			streamValue:  true,
+			expectStream: true,
+			expectOpts:   true,
+		},
+		{
+			name:         "stream false omits stream field (omitempty)",
+			streamValue:  false,
+			expectStream: nil, // false is omitted by omitempty, upstream treats absent as non-streaming
+			expectOpts:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := `{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":` +
+				fmt.Sprintf(`%v`, tt.streamValue) + `}`
+
+			result, err := TransformAnthropicToChat([]byte(body))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var req map[string]interface{}
+			if err := json.Unmarshal(result, &req); err != nil {
+				t.Fatalf("failed to parse result: %v", err)
+			}
+
+			gotStream := req["stream"]
+			if tt.expectStream == nil {
+				if gotStream != nil {
+					t.Errorf("expected stream to be absent, got %v", gotStream)
+				}
+			} else {
+				if gotStream != tt.expectStream {
+					t.Errorf("stream = %v, want %v", gotStream, tt.expectStream)
+				}
+			}
+
+			_, hasOpts := req["stream_options"]
+			if hasOpts != tt.expectOpts {
+				t.Errorf("stream_options present = %v, want %v", hasOpts, tt.expectOpts)
 			}
 		})
 	}

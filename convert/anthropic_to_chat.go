@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"ai-proxy/logging"
 	"ai-proxy/types"
 )
 
@@ -34,20 +33,21 @@ func TransformAnthropicToChat(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to parse Anthropic request: %w", err)
 	}
 
-	// Force streaming mode — this proxy only supports SSE streaming
+	// Preserve the client's streaming preference.
+	// When stream:false, the proxy uses a non-SSE response path.
 	stream := anthReq.Stream
-	if !stream {
-		logging.InfoMsg("Forcing stream=true for upstream request (client did not specify)")
-		stream = true
-	}
+
 	openReq := types.ChatCompletionRequest{
 		Model:       anthReq.Model,
 		MaxTokens:   anthReq.MaxTokens,
 		Stream:      stream,
 		Temperature: anthReq.Temperature,
 		TopP:        anthReq.TopP,
-		// Request usage statistics from upstream (required for Anthropic SDK)
-		StreamOptions: &types.StreamOptions{IncludeUsage: true},
+	}
+
+	// Request usage statistics from upstream only when streaming
+	if stream {
+		openReq.StreamOptions = &types.StreamOptions{IncludeUsage: true}
 	}
 
 	// Convert system message (may be string or array of content blocks)

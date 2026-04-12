@@ -397,6 +397,7 @@ func (r *Recorder) RecordUpstreamResponse(statusCode int, headers http.Header) *
 
 // RecordDownstreamResponse initializes downstream response capture and returns a responseRecorder for chunk recording.
 //
+// @param headers - HTTP response headers. May be nil (results in empty map).
 // @return Pointer to responseRecorder for recording chunks, never nil.
 //
 // @pre r != nil (receiver must be valid)
@@ -406,15 +407,15 @@ func (r *Recorder) RecordUpstreamResponse(statusCode int, headers http.Header) *
 //
 // @note Thread-safe: uses mutex for exclusive access during initialization.
 // @note Returned responseRecorder is NOT thread-safe; use from single goroutine.
-func (r *Recorder) RecordDownstreamResponse() *responseRecorder {
+func (r *Recorder) RecordDownstreamResponse(headers http.Header) *responseRecorder {
 	// Lock for the initialization phase only
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// Initialize the downstream response capture
-	// StatusCode and Headers not set here (set separately if needed)
 	r.data.DownstreamResponse = &SSEResponseCapture{
-		Chunks: []SSEChunk{},
+		Headers: SanitizeHeaders(headers),
+		Chunks:  []SSEChunk{},
 	}
 
 	// Return recorder for subsequent chunk recording

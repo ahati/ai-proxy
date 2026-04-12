@@ -89,7 +89,7 @@ func TestRecorder_GetDownstreamResponseRecorder_ExistingResponse(t *testing.T) {
 	r := NewRecorder("test-id", "GET", "/test", "127.0.0.1")
 
 	// Initialize downstream response
-	r.RecordDownstreamResponse()
+	r.RecordDownstreamResponse(nil)
 
 	// Get existing recorder
 	recorder := r.GetDownstreamResponseRecorder()

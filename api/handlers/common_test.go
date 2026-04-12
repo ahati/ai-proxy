@@ -371,10 +371,11 @@ func (m *mockTransformer) HandleCancel() error {
 }
 
 type fakeUpstreamClient struct {
-	buildReq func(ctx context.Context, body []byte) (*http.Request, error)
-	setHdrs  func(req *http.Request)
-	do       func(req *http.Request) (*http.Response, error)
-	closeFn  func()
+	buildReq  func(ctx context.Context, body []byte) (*http.Request, error)
+	setHdrs   func(req *http.Request)
+	setHdrsNS func(req *http.Request)
+	do        func(req *http.Request) (*http.Response, error)
+	closeFn   func()
 }
 
 func (f *fakeUpstreamClient) BuildRequest(ctx context.Context, body []byte) (*http.Request, error) {
@@ -387,6 +388,12 @@ func (f *fakeUpstreamClient) BuildRequest(ctx context.Context, body []byte) (*ht
 func (f *fakeUpstreamClient) SetHeaders(req *http.Request) {
 	if f.setHdrs != nil {
 		f.setHdrs(req)
+	}
+}
+
+func (f *fakeUpstreamClient) SetHeadersNonStreaming(req *http.Request) {
+	if f.setHdrsNS != nil {
+		f.setHdrsNS(req)
 	}
 }
 
@@ -592,7 +599,7 @@ func TestFinalizeCapture(t *testing.T) {
 		downstream.RecordChunk("message", []byte(`{"test": "value"}`))
 		upstream.RecordChunk("message", []byte(`{"id": "req-123"}`))
 
-		finalizeCapture(cc, downstream, upstream)
+		finalizeCapture(cc, downstream, upstream, nil)
 
 		if cc.Recorder.Data().DownstreamResponse == nil {
 			t.Error("expected DownstreamResponse to be set")
@@ -619,7 +626,7 @@ func TestFinalizeCapture(t *testing.T) {
 
 		downstream.RecordChunk("message", []byte(`{"id": "req-456"}`))
 
-		finalizeCapture(cc, downstream, upstream)
+		finalizeCapture(cc, downstream, upstream, nil)
 
 		if cc.RequestID != "req-456" {
 			t.Errorf("expected RequestID %q, got %q", "req-456", cc.RequestID)
@@ -641,7 +648,7 @@ func TestFinalizeCapture(t *testing.T) {
 
 		downstream.RecordChunk("message", []byte(`{"id": "new-id"}`))
 
-		finalizeCapture(cc, downstream, upstream)
+		finalizeCapture(cc, downstream, upstream, nil)
 
 		if cc.RequestID != "existing-id" {
 			t.Errorf("expected RequestID to remain %q, got %q", "existing-id", cc.RequestID)
@@ -659,10 +666,108 @@ func TestProxyRequest_BadUpstreamURL(t *testing.T) {
 		apiKey:      "test-key",
 	}
 
-	proxyRequest(c, h, []byte(`{"test": "data"}`))
+	proxyRequest(c, h, []byte(`{"test": "data"}`), []byte(`{"test": "data"}`))
 
 	if w.Code != http.StatusInternalServerError {
 		t.Errorf("expected status %d, got %d", http.StatusInternalServerError, w.Code)
+	}
+}
+
+func TestIsStreamingRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "stream true",
+			body: `{"stream": true, "model": "gpt-4"}`,
+			want: true,
+		},
+		{
+			name: "stream false",
+			body: `{"stream": false, "model": "gpt-4"}`,
+			want: false,
+		},
+		{
+			name: "stream absent defaults to true",
+			body: `{"model": "gpt-4"}`,
+			want: true,
+		},
+		{
+			name: "invalid JSON defaults to true",
+			body: `not json`,
+			want: true,
+		},
+		{
+			name: "empty body defaults to true",
+			body: `{}`,
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isStreamingRequest([]byte(tt.body))
+			if got != tt.want {
+				t.Errorf("isStreamingRequest(%q) = %v, want %v", tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProxyRequest_NonStreaming(t *testing.T) {
+	// Verify that stream:false requests get a plain JSON response (not SSE)
+	upstreamResponse := `{"id":"chatcmpl-123","choices":[{"message":{"role":"assistant","content":"hello"}}]}`
+
+	origClient := newUpstreamClient
+	defer func() { newUpstreamClient = origClient }()
+
+	newUpstreamClient = func(baseURL, apiKey string) upstreamClient {
+		return &fakeUpstreamClient{
+			setHdrsNS: func(req *http.Request) {
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer test-key")
+				req.Header.Set("Accept", "application/json")
+			},
+			do: func(req *http.Request) (*http.Response, error) {
+				// Verify Accept header is JSON, not SSE
+				if req.Header.Get("Accept") != "application/json" {
+					t.Errorf("expected Accept application/json for non-streaming, got %s", req.Header.Get("Accept"))
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(upstreamResponse)),
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+				}, nil
+			},
+		}
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"stream": false}`))
+
+	h := &mockHandler{
+		upstreamURL: "https://api.example.com",
+		apiKey:      "test-key",
+	}
+
+	proxyRequest(c, h, []byte(`{"stream": false, "model": "gpt-4"}`), []byte(`{"stream": false, "model": "gpt-4"}`))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	// Verify response is plain JSON, not SSE
+	contentType := w.Header().Get("Content-Type")
+	if contentType != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %s", contentType)
+	}
+
+	body := w.Body.String()
+	if body != upstreamResponse {
+		t.Errorf("expected body %q, got %q", upstreamResponse, body)
 	}
 }
 

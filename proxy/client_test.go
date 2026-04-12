@@ -118,6 +118,23 @@ func TestSetHeaders(t *testing.T) {
 	}
 }
 
+func TestSetHeadersNonStreaming(t *testing.T) {
+	client := NewClient("https://api.example.com", "my-api-key")
+	req := httptest.NewRequest("POST", "/test", nil)
+
+	client.SetHeadersNonStreaming(req)
+
+	if req.Header.Get("Content-Type") != "application/json" {
+		t.Errorf("expected Content-Type 'application/json', got %s", req.Header.Get("Content-Type"))
+	}
+	if req.Header.Get("Authorization") != "Bearer my-api-key" {
+		t.Errorf("expected Authorization 'Bearer my-api-key', got %s", req.Header.Get("Authorization"))
+	}
+	if req.Header.Get("Accept") != "application/json" {
+		t.Errorf("expected Accept 'application/json', got %s", req.Header.Get("Accept"))
+	}
+}
+
 func TestSetHeaders_WithCaptureContext(t *testing.T) {
 	// SetHeaders is a pure function that only sets headers on the request.
 	// Recording to capture context is handled by the caller (proxyRequest),
