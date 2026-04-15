@@ -88,11 +88,6 @@ func (c *ResponsesToChatConverter) convertRequest(req *types.ResponsesRequest) *
 		}
 	}
 
-	maxTokens := req.MaxOutputTokens
-	if maxTokens == 0 {
-		maxTokens = 65536 // Default max tokens (64k) for OpenAI-compatible APIs
-	}
-
 	// Respect the stream flag from the request, default to true for streaming
 	stream := true
 	if req.Stream != nil {
@@ -101,7 +96,7 @@ func (c *ResponsesToChatConverter) convertRequest(req *types.ResponsesRequest) *
 
 	chatReq := &types.ChatCompletionRequest{
 		Model:       req.Model,
-		MaxTokens:   maxTokens,
+		MaxTokens:   req.MaxOutputTokens,
 		Stream:      stream,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
