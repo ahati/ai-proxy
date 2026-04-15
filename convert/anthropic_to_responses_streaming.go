@@ -1,4 +1,4 @@
-package toolcall
+package convert
 
 import (
 	"context"
@@ -30,7 +30,6 @@ type Usage struct {
 type ResponsesTransformer struct {
 	sseWriter  *transform.SSEWriter
 	formatter  *ResponsesFormatter
-	parser     *KimiParser
 	messageID  string
 	model      string
 	blockIndex int
@@ -43,10 +42,9 @@ type ResponsesTransformer struct {
 	inReasoning bool
 
 	// Content builders
-	textContent       strings.Builder
-	toolArgs          strings.Builder
-	reasoningContent  strings.Builder
-	extractedToolArgs strings.Builder // Args for tool calls extracted from thinking content
+	textContent      strings.Builder
+	toolArgs         strings.Builder
+	reasoningContent strings.Builder
 
 	// Output tracking
 	outputIndex     int    // Current output index counter (0-indexed)
@@ -101,11 +99,8 @@ type ResponsesTransformer struct {
 	encryptedReasoning string
 
 	// Tool call extraction from thinking content (for Kimi-style markup)
-	toolCallTransform bool // enabled by config
 
 	// GLM-5 tool call extraction from reasoning_content
-	glm5Parser            *GLM5Parser
-	glm5ToolCallTransform bool
 
 	// ctx is the request context for cache status tracking
 	ctx context.Context
@@ -586,10 +581,9 @@ func (f *ResponsesFormatter) FormatReasoningItemDone(itemID, summaryText string,
 // NewResponsesTransformer creates a new transformer for OpenAI Responses API.
 func NewResponsesTransformer(output io.Writer) *ResponsesTransformer {
 	return &ResponsesTransformer{
-		sseWriter:      transform.NewSSEWriter(output),
-		formatter:      NewResponsesFormatter("", ""),
-		parser:         NewKimiParser(),
-		glm5Parser:     NewGLM5Parser(),
+		sseWriter: transform.NewSSEWriter(output),
+		formatter: NewResponsesFormatter("", ""),
+
 		outputItems:    make([]map[string]interface{}, 0),
 		sequenceNumber: 0,
 		summaryIndex:   0,
@@ -634,20 +628,6 @@ func (t *ResponsesTransformer) SetReasoningSummaryMode(mode string) {
 // Used in ZDR mode when store:false and encrypted_reasoning is provided.
 func (t *ResponsesTransformer) SetEncryptedReasoning(encryptedReasoning string) {
 	t.encryptedReasoning = encryptedReasoning
-}
-
-// SetKimiToolCallTransform enables or disables tool call extraction from thinking content.
-// When enabled, the transformer will parse Kimi-style tool call markup in thinking text
-// and emit proper function_call output items.
-func (t *ResponsesTransformer) SetKimiToolCallTransform(enabled bool) {
-	t.toolCallTransform = enabled
-}
-
-// SetGLM5ToolCallTransform enables or disables GLM-5 XML tool call extraction.
-// When enabled, the transformer will parse <tool_call> tags in reasoning content
-// and emit proper function_call output items.
-func (t *ResponsesTransformer) SetGLM5ToolCallTransform(enabled bool) {
-	t.glm5ToolCallTransform = enabled
 }
 
 // SetContext sets the request context for cache status tracking.
@@ -827,39 +807,6 @@ func (t *ResponsesTransformer) handleContentBlockDelta(event types.Event) error 
 		var thinkingDelta types.ThinkingDelta
 		if err := json.Unmarshal(event.Delta, &thinkingDelta); err == nil && thinkingDelta.Type == "thinking_delta" {
 			if t.inReasoning {
-				// Always try GLM-5 parsing when enabled - let the parser's state machine handle detection
-				if t.glm5ToolCallTransform {
-					events := t.glm5Parser.Parse(thinkingDelta.Thinking)
-					// If parser produced events, tool calls were found/extracted
-					if len(events) > 0 {
-						for _, e := range events {
-							if e.Type == EventToolStart {
-								logging.InfoMsg("[%s] GLM-5 tool call extracted: id=%s, name=%s", t.messageID, e.ID, e.Name)
-							}
-							if err := t.writeParserEvent(e); err != nil {
-								return err
-							}
-						}
-						return nil
-					}
-					// If parser might be parsing (buffering partial tag), don't emit as reasoning
-					if t.glm5Parser.IsPotentiallyParsing() {
-						return nil
-					}
-				}
-				// Check if content contains tool call markup (only when toolCallTransform is enabled)
-				if t.toolCallTransform {
-					wasIdle := t.parser.IsIdle()
-					hasMarkup := t.parser.tokens.ContainsAny(thinkingDelta.Thinking)
-					if !wasIdle || hasMarkup {
-						// Only log when starting to parse tool calls (transition from idle to parsing)
-						if wasIdle && hasMarkup {
-							logging.InfoMsg("[%s] Tool call markup detected in thinking content, extracting tool calls", t.messageID)
-						}
-						return t.processThinkingWithToolCalls(thinkingDelta.Thinking)
-					}
-				}
-				// Normal thinking content - pass through
 				t.reasoningContent.WriteString(thinkingDelta.Thinking)
 				reasoningID := t.getReasoningID()
 				seqNum := t.nextSequenceNumber()
@@ -881,84 +828,6 @@ func (t *ResponsesTransformer) handleContentBlockDelta(event types.Event) error 
 	return nil
 }
 
-// processThinkingWithToolCalls handles thinking content that contains tool call markup.
-// It extracts tool calls and emits appropriate Responses API events.
-func (t *ResponsesTransformer) processThinkingWithToolCalls(text string) error {
-	events := t.parser.Parse(text)
-	for _, e := range events {
-		if err := t.writeParserEvent(e); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// writeParserEvent converts a parser Event to Responses API format.
-func (t *ResponsesTransformer) writeParserEvent(e Event) error {
-	switch e.Type {
-	case EventContent:
-		// Regular thinking content - emit as reasoning summary delta
-		if e.Text != "" {
-			t.reasoningContent.WriteString(e.Text)
-			reasoningID := t.getReasoningID()
-			seqNum := t.nextSequenceNumber()
-			return t.write(t.formatter.FormatReasoningSummaryDelta(reasoningID, e.Text, t.reasoningOutputIndex, t.summaryIndex, seqNum))
-		}
-	case EventToolStart:
-		// Start a new function_call output item
-		logging.InfoMsg("[%s] Tool call extracted: id=%s, name=%s", t.messageID, e.ID, e.Name)
-		t.extractedToolArgs.Reset() // Reset args builder for new tool call
-		return t.emitToolCallStart(e.ID, e.Name)
-	case EventToolArgs:
-		// Accumulate and emit function call arguments delta
-		t.extractedToolArgs.WriteString(e.Args)
-		seqNum := t.nextSequenceNumber()
-		return t.write(t.formatter.FormatFunctionCallArgsDelta(t.currentID, t.currentID, e.Args, t.toolCallOutputIndex, seqNum))
-	case EventToolEnd:
-		// End the function_call output item
-		args := t.extractedToolArgs.String()
-		logging.InfoMsg("[%s] Tool call complete: id=%s, name=%s", t.messageID, t.currentID, t.currentToolName)
-		return t.emitToolCallEnd(t.currentID, t.currentToolName, args)
-	case EventSectionEnd:
-		// Tool calls section ended - continue with reasoning if there's more content
-	}
-	return nil
-}
-
-func (t *ResponsesTransformer) emitToolCallStart(id, name string) error {
-	// If we're in reasoning and have accumulated content, keep the reasoning item.
-	// If we're in reasoning but have no content, we can close it.
-
-	// Start new function_call output item
-	outputIdx := t.outputIndex
-	t.toolCallOutputIndex = outputIdx
-	t.outputIndex++
-	t.currentID = id
-	t.currentToolName = name
-	t.inToolCall = true
-
-	seqNum := t.nextSequenceNumber()
-	return t.write(t.formatter.FormatFunctionCallItemAdded(id, name, outputIdx, seqNum))
-}
-
-// emitToolCallEnd emits the necessary events to end a function_call output item.
-func (t *ResponsesTransformer) emitToolCallEnd(id, name, args string) error {
-	t.inToolCall = false
-
-	// Track tool call in output items
-	toolItem := map[string]interface{}{
-		"type":      "function_call",
-		"id":        id,
-		"call_id":   id,
-		"name":      name,
-		"arguments": args,
-	}
-	t.outputItems = append(t.outputItems, toolItem)
-
-	seqNum := t.nextSequenceNumber()
-	return t.write(t.formatter.FormatFunctionCallItemDone(id, name, args, t.toolCallOutputIndex, seqNum))
-}
-
 func (t *ResponsesTransformer) handleContentBlockStop(event types.Event) error {
 	if event.Index == nil {
 		return nil
@@ -971,7 +840,6 @@ func (t *ResponsesTransformer) handleContentBlockStop(event types.Event) error {
 		if t.currentItem != nil {
 			contents, ok := t.currentItem["content"].([]map[string]interface{})
 			if !ok {
-				// Initialize content array if it doesn't exist or has wrong type
 				contents = []map[string]interface{}{}
 			}
 			t.currentItem["content"] = append(contents, map[string]interface{}{
@@ -990,36 +858,6 @@ func (t *ResponsesTransformer) handleContentBlockStop(event types.Event) error {
 	if t.inReasoning {
 		t.inReasoning = false
 
-		// Flush any remaining parser state (Kimi tool calls)
-		if t.toolCallTransform {
-			for {
-				events := t.parser.Parse("")
-				if len(events) == 0 {
-					break
-				}
-				for _, e := range events {
-					if err := t.writeParserEvent(e); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-		// Flush any remaining GLM-5 parser state
-		if t.glm5ToolCallTransform {
-			for {
-				events := t.glm5Parser.Parse("")
-				if len(events) == 0 {
-					break
-				}
-				for _, e := range events {
-					if err := t.writeParserEvent(e); err != nil {
-						return err
-					}
-				}
-			}
-		}
-
 		summary := t.reasoningContent.String()
 
 		// If reasoning summary mode is set, call the summarizer service
@@ -1028,7 +866,6 @@ func (t *ResponsesTransformer) handleContentBlockStop(event types.Event) error {
 				summarizedText, err := svc.Summarize(context.Background(), summary)
 				if err != nil {
 					logging.ErrorMsg("[%s] Failed to summarize reasoning: %v", t.responseID, err)
-					// Fall through to use original reasoning text
 				} else {
 					summary = summarizedText
 				}
@@ -1460,3 +1297,22 @@ func (t *ResponsesTransformer) Process(event transform.PipelineEvent) error {
 
 // compile-time check that ResponsesTransformer implements Stage.
 var _ transform.Stage = (*ResponsesTransformer)(nil)
+
+// Receive processes an Anthropic event JSON string.
+// It implements the AnthropicEventReceiver interface for chaining with AnthropicTransformer.
+func (t *ResponsesTransformer) Receive(eventJSON string) error {
+	var event types.Event
+	if err := json.Unmarshal([]byte(eventJSON), &event); err != nil {
+		return nil // Skip unparseable events
+	}
+	return t.handleEvent(event)
+}
+
+// ReceiveDone signals the end of the stream.
+// It implements the AnthropicEventReceiver interface.
+func (t *ResponsesTransformer) ReceiveDone() error {
+	return t.Flush()
+}
+
+// compile-time check that ResponsesTransformer implements AnthropicEventReceiver.
+var _ transform.AnthropicEventReceiver = (*ResponsesTransformer)(nil)

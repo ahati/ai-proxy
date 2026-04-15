@@ -220,17 +220,20 @@ func buildAnthropicToAnthropic(w io.Writer, cfg transform.Config) (transform.SSE
 //
 // @brief Anthropic SSE → tool call extraction → Responses SSE.
 //
-// Chain: ResponsesTransformer (tool extraction + conversion) → [web search] → output
+// Chain: AnthropicTransformer (tool extraction) → AnthropicToResponsesStreamingConverter → [web search] → output
 func buildAnthropicToResponses(w io.Writer, cfg transform.Config) (transform.SSETransformer, error) {
-	// ResponsesTransformer handles both tool extraction and format conversion
-	t := toolcall.NewResponsesTransformer(w)
+	// AnthropicToResponsesStreamingConverter writes Responses SSE directly to w
+	responsesConverter := convert.NewResponsesTransformer(w)
+	responsesConverter.SetInputItems(cfg.InputItems)
+	responsesConverter.SetStore(cfg.Store)
+	responsesConverter.SetPreviousResponseID(cfg.PreviousResponseID)
+	responsesConverter.SetReasoningSummaryMode(cfg.ReasoningSummaryMode)
+	responsesConverter.SetEncryptedReasoning(cfg.EncryptedReasoning)
+
+	// AnthropicTransformer feeds Anthropic events to converter via receiver pattern
+	t := toolcall.NewAnthropicTransformerWithReceiver(responsesConverter)
 	t.SetKimiToolCallTransform(cfg.KimiToolCallTransform)
 	t.SetGLM5ToolCallTransform(cfg.GLM5ToolCallTransform)
-	t.SetInputItems(cfg.InputItems)
-	t.SetStore(cfg.Store)
-	t.SetPreviousResponseID(cfg.PreviousResponseID)
-	t.SetReasoningSummaryMode(cfg.ReasoningSummaryMode)
-	t.SetEncryptedReasoning(cfg.EncryptedReasoning)
 
 	// Wrap with web search if enabled
 	if cfg.NeedsWebSearch() {
