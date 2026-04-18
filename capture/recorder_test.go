@@ -490,6 +490,26 @@ func TestRecorder_Data(t *testing.T) {
 	}
 }
 
+func TestRecorder_SetUpstreamURL(t *testing.T) {
+	rec := NewRecorder("req-id", "POST", "/test", "localhost")
+	rec.SetUpstreamURL("https://api.anthropic.com/v1/messages")
+
+	data := rec.Data()
+	if data.UpstreamURL != "https://api.anthropic.com/v1/messages" {
+		t.Errorf("expected UpstreamURL %q, got %q", "https://api.anthropic.com/v1/messages", data.UpstreamURL)
+	}
+}
+
+func TestRecorder_SetUpstreamURL_Empty(t *testing.T) {
+	rec := NewRecorder("req-id", "POST", "/test", "localhost")
+	rec.SetUpstreamURL("")
+
+	data := rec.Data()
+	if data.UpstreamURL != "" {
+		t.Errorf("expected empty UpstreamURL, got %q", data.UpstreamURL)
+	}
+}
+
 func TestResponseRecorder_RecordChunk(t *testing.T) {
 	rec := NewRecorder("req-id", "POST", "/test", "localhost")
 	rr := rec.RecordUpstreamResponse(200, http.Header{})

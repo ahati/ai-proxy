@@ -229,6 +229,11 @@ func prepareUpstreamRequest(
 	logging.InfoMsg("Sending request to upstream: %s (downstream_model=%s, upstream_model=%s)",
 		h.UpstreamURL(), downstreamModel, upstreamModel)
 
+	// Capture upstream URL for logging
+	if cc := capture.GetCaptureContext(c.Request.Context()); cc != nil {
+		cc.Recorder.SetUpstreamURL(h.UpstreamURL())
+	}
+
 	client := newUpstreamClient(h.UpstreamURL(), apiKey)
 
 	req, err := client.BuildRequest(c.Request.Context(), body)

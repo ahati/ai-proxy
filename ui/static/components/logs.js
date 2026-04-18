@@ -316,6 +316,10 @@ async function renderLogDetail(requestId) {
                         h('span', { className: 'log-detail-value', style: 'font-family:monospace;font-size:0.8rem' }, escapeHtml(entry.path))
                     ),
                     h('div', { className: 'log-detail-field' },
+                        h('span', { className: 'log-detail-label' }, 'Upstream URL'),
+                        h('span', { className: 'log-detail-value', style: 'font-family:monospace;font-size:0.8rem' }, escapeHtml(entry.upstream_url || '\u2014'))
+                    ),
+                    h('div', { className: 'log-detail-field' },
                         h('span', { className: 'log-detail-label' }, 'Status'),
                         h('span', { className: 'log-detail-value' },
                             h('span', { className: 'badge-status ' + (status >= 400 ? 'status-error' : status >= 200 ? 'status-ok' : 'status-unknown') },

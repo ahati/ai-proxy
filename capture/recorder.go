@@ -104,6 +104,11 @@ type RequestRecorder struct {
 	// Valid values: IP:port format string.
 	ClientIP string
 
+	// UpstreamURL is the destination URL sent to the upstream API provider.
+	// Empty if request failed before upstream call.
+	// Valid values: valid URL string or empty string.
+	UpstreamURL string
+
 	// DownstreamRequest captures the client request received by the proxy.
 	// Nil until RecordDownstreamRequest is called.
 	// Valid values: pointer to HTTPRequestCapture, or nil.
@@ -457,6 +462,22 @@ func (r *Recorder) SetRequestID(id string) {
 	defer r.mu.Unlock()
 
 	r.data.RequestID = id
+}
+
+// SetUpstreamURL sets the upstream destination URL in a thread-safe manner.
+//
+// @param url - The upstream URL to set. May be empty if request failed before upstream call.
+//
+// @pre r != nil
+// @post r.data.UpstreamURL == url
+//
+// @note Thread-safe: uses mutex for exclusive access.
+func (r *Recorder) SetUpstreamURL(url string) {
+	// Lock for exclusive access to data
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.data.UpstreamURL = url
 }
 
 // responseRecorder records SSE chunks for a single response stream.

@@ -22,6 +22,10 @@ type LogEntry struct {
 	Path string `json:"path"`
 	// ClientIP is the remote address of the client.
 	ClientIP string `json:"client_ip,omitempty"`
+	// UpstreamURL is the destination URL sent to the upstream API provider.
+	// Empty if request failed before upstream call.
+	// Valid values: valid URL string or empty string.
+	UpstreamURL string `json:"upstream_url,omitempty"`
 	// DownstreamRequest is the captured client request.
 	DownstreamRequest *HTTPRequestCapture `json:"downstream_request,omitempty"`
 	// UpstreamRequest is the captured upstream API request.

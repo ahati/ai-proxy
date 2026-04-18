@@ -89,6 +89,7 @@ func (m *MemoryStore) Store(recorder *Recorder) {
 		Method:             data.Method,
 		Path:               data.Path,
 		ClientIP:           data.ClientIP,
+		UpstreamURL:        data.UpstreamURL,
 		DownstreamRequest:  data.DownstreamRequest,
 		UpstreamRequest:    data.UpstreamRequest,
 		UpstreamResponse:   data.UpstreamResponse,

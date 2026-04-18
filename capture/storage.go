@@ -242,6 +242,7 @@ func (s *Storage) serialize(r *RequestRecorder) LogEntry {
 		Method:             r.Method,
 		Path:               r.Path,
 		ClientIP:           r.ClientIP,
+		UpstreamURL:        r.UpstreamURL,
 		DownstreamRequest:  r.DownstreamRequest,
 		UpstreamRequest:    r.UpstreamRequest,
 		UpstreamResponse:   r.UpstreamResponse,
