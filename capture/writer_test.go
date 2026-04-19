@@ -331,6 +331,31 @@ func TestExtractRequestIDFromSSEChunk(t *testing.T) {
 			data:   json.RawMessage(`{"id": "top-level-id", "type": "message_start", "message": {"id": "nested-id"}}`),
 			wantID: "top-level-id",
 		},
+		{
+			name:   "Responses API response.created format",
+			data:   json.RawMessage(`{"type": "response.created", "sequence_number": 0, "response": {"id": "resp_12345", "object": "response", "status": "in_progress"}}`),
+			wantID: "resp_12345",
+		},
+		{
+			name:   "Responses API response.in_progress format",
+			data:   json.RawMessage(`{"type": "response.in_progress", "sequence_number": 1, "response": {"id": "resp_67890", "status": "in_progress"}}`),
+			wantID: "resp_67890",
+		},
+		{
+			name:   "Responses API with empty response.id",
+			data:   json.RawMessage(`{"type": "response.created", "response": {"id": ""}}`),
+			wantID: "",
+		},
+		{
+			name:   "Responses API with missing response.id",
+			data:   json.RawMessage(`{"type": "response.created", "response": {"status": "in_progress"}}`),
+			wantID: "",
+		},
+		{
+			name:   "top-level ID takes precedence over response.id",
+			data:   json.RawMessage(`{"id": "chatcmpl-top", "type": "response.created", "response": {"id": "resp-nested"}}`),
+			wantID: "chatcmpl-top",
+		},
 	}
 
 	for _, tt := range tests {

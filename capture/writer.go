@@ -235,6 +235,7 @@ func (cw *captureWriter) Chunks() []SSEChunk {
 // @note Supports multiple formats:
 //   - OpenAI Chat/Responses: {"id": "..."}
 //   - Anthropic message_start: {"type": "message_start", "message": {"id": "..."}}
+//   - Responses API events: {"type": "response.created", "response": {"id": "..."}}
 //
 // @note Thread-safe: pure function with no side effects.
 func ExtractRequestIDFromSSEChunk(data json.RawMessage) string {
@@ -257,6 +258,16 @@ func ExtractRequestIDFromSSEChunk(data json.RawMessage) string {
 	}
 	if err := json.Unmarshal(data, &msgStart); err == nil && msgStart.Message.ID != "" {
 		return msgStart.Message.ID
+	}
+
+	var respStart struct {
+		Type     string `json:"type"`
+		Response struct {
+			ID string `json:"id"`
+		} `json:"response"`
+	}
+	if err := json.Unmarshal(data, &respStart); err == nil && respStart.Response.ID != "" {
+		return respStart.Response.ID
 	}
 
 	return ""
