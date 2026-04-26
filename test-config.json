@@ -52,6 +52,14 @@
       },
       "default": "openai",
       "apiKey": "dummy"
+    },
+    {
+      "name": "opencode_go",
+      "endpoints": {
+        "openai": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "default": "openai",
+      "apiKey": "${OPENCODE_GO_API_KEY}"
     }
   ],
   "models": {
@@ -59,29 +67,75 @@
       "provider": "chutes",
       "model": "moonshotai/Kimi-K2.5-TEE",
       "type": "auto",
-      "kimi_tool_call_transform": true
+      "kimi_tool_call_transform": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95
+      }
     },
     "glm-5.1": {
       "provider": "z.ai",
       "model": "glm-5.1",
-      "type": "openai"
+      "type": "openai",
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_p": 0.95
+      }
     },
     "glm-5-turbo": {
       "provider": "z.ai",
       "model": "glm-5-turbo",
-      "type": "openai"
+      "type": "openai",
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_p": 0.95
+      }
     },
     "glm-5": {
       "provider": "alibaba",
       "model": "glm-5",
       "type": "auto",
-      "glm5_tool_call_transform": true
+      "glm5_tool_call_transform": true,
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_p": 0.95
+      }
+    },
+    "deepseek-v4-pro": {
+      "provider": "opencode_go",
+      "model": "deepseek-v4-pro",
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_p": 0.95
+      }
+    },
+    "deepseek-v4-flash": {
+      "provider": "opencode_go",
+      "model": "deepseek-v4-flash",
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_p": 0.95
+      }
+    },
+    "kimi-k2.6": {
+      "provider": "opencode_go",
+      "model": "kimi-k2.6",
+      "type": "auto",
+      "kimi_tool_call_transform": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95
+      }
     },
     "kimi-k2.5": {
       "provider": "alibaba",
       "model": "kimi-k2.5",
       "type": "anthropic",
-      "kimi_tool_call_transform": true
+      "kimi_tool_call_transform": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95
+      }
     },
     "gpt-5.4": {
       "provider": "z.ai",
@@ -95,27 +149,47 @@
       "provider": "minimax",
       "model": "MiniMax-M2.5",
       "type": "auto",
-      "reasoning_split": true
+      "reasoning_split": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40
+      }
     },
     "gpt-5-mini": {
       "provider": "minimax",
       "model": "MiniMax-M2.7",
       "type": "auto",
       "kimi_tool_call_transform": false,
-      "reasoning_split": true
+      "reasoning_split": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40
+      }
     },
     "MiniMax-M2.7": {
-      "provider": "minimax",
+      "provider": "opencode_go",
       "model": "MiniMax-M2.7",
       "type": "auto",
       "kimi_tool_call_transform": false,
-      "reasoning_split": true
+      "reasoning_split": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40
+      }
     },
     "qwen3-max": {
       "provider": "alibaba",
       "model": "qwen3-max-2026-01-23",
       "type": "auto",
-      "kimi_tool_call_transform": false
+      "kimi_tool_call_transform": false,
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20
+      }
     },
     "claude-opus-4-6": {
       "provider": "alibaba",
@@ -133,28 +207,51 @@
       "provider": "alibaba",
       "model": "kimi-k2.5",
       "type": "anthropic",
-      "kimi_tool_call_transform": true
+      "kimi_tool_call_transform": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95
+      }
     },
     "claude-sonnet-4-5": {
       "provider": "alibaba",
       "model": "kimi-k2.5",
       "type": "anthropic",
-      "kimi_tool_call_transform": true
+      "kimi_tool_call_transform": true,
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95
+      }
     },
     "claude-haiku-4.5": {
       "provider": "alibaba",
       "model": "MiniMax-M2.5",
-      "type": "auto"
+      "type": "auto",
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40
+      }
     },
     "claude-haiku-4.6": {
       "provider": "alibaba",
       "model": "MiniMax-M2.5",
-      "type": "auto"
+      "type": "auto",
+      "sampling_params": {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40
+      }
     },
-    "openrouter/qwen3.6-plus:free": {
-      "provider": "openrouter",
-      "model": "qwen/qwen3.6-plus:free",
-      "type": "auto"
+    "qwen3.6-plus": {
+      "provider": "alibaba",
+      "model": "qwen3.6-plus",
+      "type": "auto",
+      "sampling_params": {
+        "temperature": 0.7,
+        "top_p": 0.8,
+        "top_k": 20
+      }
     }
   },
   "fallback": {
@@ -162,7 +259,12 @@
     "provider": "alibaba",
     "model": "{model}",
     "type": "auto",
-    "kimi_tool_call_transform": false
+    "kimi_tool_call_transform": false,
+    "sampling_params": {
+      "override": false,
+      "temperature": 0.7,
+      "top_p": 0.95
+    }
   },
   "summarizer": {
     "enabled": false,
