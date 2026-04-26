@@ -974,3 +974,104 @@ func TestPrependHistoryToInput_CombinesMessageAndFunctionCall(t *testing.T) {
 		}
 	}
 }
+
+// TestConvertResponsesInputItems_ReasoningToThinking tests that reasoning items
+// from previous conversation turns are converted to Anthropic thinking blocks.
+func TestConvertResponsesInputItems_ReasoningToThinking(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "user",
+			"content": "Hello",
+		},
+		map[string]interface{}{
+			"type": "reasoning",
+			"summary": []interface{}{
+				map[string]interface{}{
+					"type": "summary_text",
+					"text": "I need to analyze this request carefully.",
+				},
+				map[string]interface{}{
+					"type": "summary_text",
+					"text": "The user is asking about reasoning tokens.",
+				},
+			},
+		},
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "assistant",
+			"content": "I'll help you with that.",
+		},
+	}
+
+	// Convert using the internal function through TransformResponsesToAnthropicWithOptions
+	body := map[string]interface{}{
+		"model": "claude-3-opus",
+		"input": input,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	output, err := TransformResponsesToAnthropicWithOptions(bodyBytes, nil, true)
+	if err != nil {
+		t.Fatalf("TransformResponsesToAnthropicWithOptions returned error: %v", err)
+	}
+
+	var req types.MessageRequest
+	if err := json.Unmarshal(output, &req); err != nil {
+		t.Fatalf("Failed to parse output: %v", err)
+	}
+
+	// Should have 2 messages: user + assistant with thinking block
+	if len(req.Messages) != 2 {
+		t.Errorf("Expected 2 messages, got %d", len(req.Messages))
+	}
+
+	// Find the assistant message (should have thinking block)
+	var assistantMsg *types.MessageInput
+	for i := range req.Messages {
+		if req.Messages[i].Role == "assistant" {
+			assistantMsg = &req.Messages[i]
+			break
+		}
+	}
+
+	if assistantMsg == nil {
+		t.Fatal("Expected assistant message not found")
+	}
+
+	// Check that assistant message has thinking content
+	blocks, ok := assistantMsg.Content.([]interface{})
+	if !ok {
+		t.Fatalf("Expected assistant content to be array of blocks, got %T", assistantMsg.Content)
+	}
+
+	if len(blocks) == 0 {
+		t.Fatal("Expected assistant message to have content blocks")
+	}
+
+	// Check for thinking block
+	var foundThinking bool
+	for _, block := range blocks {
+		blockMap, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if blockMap["type"] == "thinking" {
+			foundThinking = true
+			thinking, _ := blockMap["thinking"].(string)
+			if thinking == "" {
+				t.Error("Expected thinking block to have non-empty thinking text")
+			}
+			// Should contain concatenated summary text
+			expectedText := "I need to analyze this request carefully.\nThe user is asking about reasoning tokens."
+			if thinking != expectedText {
+				t.Errorf("Expected thinking text %q, got %q", expectedText, thinking)
+			}
+			break
+		}
+	}
+
+	if !foundThinking {
+		t.Error("Expected to find thinking block in assistant message")
+	}
+}

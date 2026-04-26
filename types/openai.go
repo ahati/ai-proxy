@@ -147,6 +147,11 @@ type Message struct {
 	// ToolCallID references the tool call being responded to.
 	// Only present in tool response messages.
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// ReasoningContent contains the model's reasoning process from previous turns.
+	// Required by some providers (e.g., DeepSeek) to be passed back in multi-turn
+	// conversations when using thinking/reasoning mode.
+	// Uses *string to distinguish nil (omit from JSON) from "" (present but empty).
+	ReasoningContent *string `json:"reasoning_content,omitempty"`
 }
 
 // ToolCall represents a function call made by the model.

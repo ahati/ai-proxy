@@ -265,7 +265,15 @@ func convertResponsesInputItemsToAnthropicMessages(items []interface{}, addSyste
 			}
 
 		case "reasoning":
-			// Dropped when converting into an Anthropic request.
+			// Convert reasoning item to Anthropic thinking block
+			reasoningText := ExtractReasoningText(msg)
+			if reasoningText != "" {
+				block := map[string]interface{}{
+					"type":     "thinking",
+					"thinking": reasoningText,
+				}
+				appendMessage("assistant", []interface{}{block})
+			}
 		}
 	}
 
@@ -697,6 +705,8 @@ func extractContentFromInput(content interface{}) string {
 }
 
 // convertResponsesToolsToAnthropic converts OpenAI Responses API tools to Anthropic tools.
+
+
 func convertResponsesToolsToAnthropic(openTools []types.ResponsesTool) []types.ToolDef {
 	if len(openTools) == 0 {
 		return nil
@@ -856,12 +866,15 @@ func prependHistoryToInput(hist *conversation.Conversation, currentInput interfa
 func combineOutputItems(outputs []types.OutputItem) []interface{} {
 	var result []interface{}
 
-	// First pass: collect assistant messages and function_calls
+	// First pass: collect reasoning items, assistant message, and all function_calls
+	var reasoningItems []types.OutputItem
 	var assistantMsg *types.OutputItem
 	var functionCalls []types.OutputItem
 
 	for _, output := range outputs {
 		switch output.Type {
+		case "reasoning":
+			reasoningItems = append(reasoningItems, output)
 		case "message":
 			if output.Role == "assistant" {
 				assistantMsg = &output
@@ -871,8 +884,16 @@ func combineOutputItems(outputs []types.OutputItem) []interface{} {
 		}
 	}
 
-	// If we have both an assistant message and function_calls, combine them
-	if assistantMsg != nil && len(functionCalls) > 0 {
+	// Add reasoning items first (they appear before assistant messages in output)
+	for _, r := range reasoningItems {
+		result = append(result, map[string]interface{}{
+			"type":    "reasoning",
+			"summary": buildSummaryArray(r.Summary),
+		})
+	}
+
+	// If we have an assistant message, combine it with all function_calls
+	if assistantMsg != nil {
 		// Create a combined input item with both content and tool_calls
 		combinedItem := map[string]interface{}{
 			"type": "message",
@@ -891,51 +912,47 @@ func combineOutputItems(outputs []types.OutputItem) []interface{} {
 			combinedItem["content"] = contentParts
 		}
 
-		// Add tool_calls as a nested array
-		toolCalls := make([]interface{}, len(functionCalls))
-		for i, fc := range functionCalls {
-			toolCalls[i] = map[string]interface{}{
+		// Add tool_calls if any were collected
+		if len(functionCalls) > 0 {
+			toolCalls := make([]interface{}, len(functionCalls))
+			for i, fc := range functionCalls {
+				toolCalls[i] = map[string]interface{}{
+					"type":      "function_call",
+					"call_id":   fc.CallID,
+					"name":      fc.Name,
+					"arguments": fc.Arguments,
+				}
+			}
+			combinedItem["tool_calls"] = toolCalls
+		}
+
+		result = append(result, combinedItem)
+	} else {
+		// No assistant message, add function_calls as-is
+		for _, fc := range functionCalls {
+			result = append(result, map[string]interface{}{
 				"type":      "function_call",
 				"call_id":   fc.CallID,
 				"name":      fc.Name,
 				"arguments": fc.Arguments,
-			}
-		}
-		combinedItem["tool_calls"] = toolCalls
-
-		result = append(result, combinedItem)
-	} else {
-		// No combination needed, add items as-is
-		for _, output := range outputs {
-			switch output.Type {
-			case "message":
-				if output.Role == "assistant" {
-					itemMap := map[string]interface{}{
-						"type": "message",
-						"role": "assistant",
-					}
-					if len(output.Content) > 0 {
-						contentParts := make([]interface{}, len(output.Content))
-						for i, c := range output.Content {
-							contentParts[i] = map[string]interface{}{
-								"type": c.Type,
-								"text": c.Text,
-							}
-						}
-						itemMap["content"] = contentParts
-					}
-					result = append(result, itemMap)
-				}
-			case "function_call":
-				result = append(result, map[string]interface{}{
-					"type":      "function_call",
-					"call_id":   output.CallID,
-					"name":      output.Name,
-					"arguments": output.Arguments,
-				})
-			}
+			})
 		}
 	}
 
 	return result
+}
+
+// buildSummaryArray converts a summary string into the summary array format
+// expected by the Responses API input format.
+func buildSummaryArray(summary string) []map[string]interface{} {
+	if summary == "" {
+		return []map[string]interface{}{}
+	}
+	// The summary is already concatenated with newlines, return as a single summary_text item
+	return []map[string]interface{}{
+		{
+			"type": "summary_text",
+			"text": summary,
+		},
+	}
 }

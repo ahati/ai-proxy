@@ -235,12 +235,14 @@ type inputItemGroup struct {
 	message    *types.Message   // Parsed message content (for message items)
 	toolCalls  []types.ToolCall // Tool calls to merge (for function_call items)
 	toolOutput *types.Message   // Tool output message (for function_call_output items)
+	reasoning  string           // Buffered reasoning text for assistant messages (DeepSeek thinking mode)
 }
 
 // groupProcessor holds state during input item processing.
 type groupProcessor struct {
 	groups           []inputItemGroup
 	pendingToolCalls []types.ToolCall
+	pendingReasoning string // Buffered reasoning text, attached to next assistant message
 	converter        *ResponsesToChatConverter
 }
 
@@ -248,7 +250,9 @@ type groupProcessor struct {
 // It uses a two-phase approach: grouping then conversion.
 func (c *ResponsesToChatConverter) convertInputItems(items []interface{}) []types.Message {
 	groups := c.groupInputItems(items)
-	return c.convertGroupsToMessages(groups)
+	messages := c.convertGroupsToMessages(groups)
+	ensureReasoningOnAllAssistants(messages)
+	return messages
 }
 
 // groupInputItems iterates over input items and delegates to handlers.
@@ -273,11 +277,27 @@ func (c *ResponsesToChatConverter) groupInputItems(items []interface{}) []inputI
 			p.handleMessageItem(itemMap)
 		case "function_call_output":
 			p.handleFunctionCallOutputItem(itemMap)
+		case "reasoning":
+			p.handleReasoningItem(itemMap)
 		}
 	}
 
 	p.flushPendingToolCalls()
 	return p.groups
+}
+
+// handleReasoningItem buffers reasoning summary text to be attached to the next
+// assistant message as ReasoningContent. Required by providers like DeepSeek that
+// demand reasoning_content be passed back in multi-turn thinking-mode conversations.
+func (p *groupProcessor) handleReasoningItem(itemMap map[string]interface{}) {
+	summary := ExtractReasoningText(itemMap)
+	if summary != "" {
+		if p.pendingReasoning != "" {
+			p.pendingReasoning += "\n" + summary
+		} else {
+			p.pendingReasoning = summary
+		}
+	}
 }
 
 // handleFunctionCallItem accumulates function_call items into pendingToolCalls.
@@ -316,6 +336,12 @@ func (p *groupProcessor) handleMessageItem(itemMap map[string]interface{}) {
 
 	// If this is an assistant message and we have pending tool calls, MERGE them
 	if role == "assistant" && len(p.pendingToolCalls) > 0 {
+		// Attach any buffered reasoning to this assistant message
+		if p.pendingReasoning != "" {
+			reasoning := p.pendingReasoning
+			msg.ReasoningContent = &reasoning
+			p.pendingReasoning = ""
+		}
 		p.groups = append(p.groups, inputItemGroup{
 			itemType:  "merged_assistant",
 			message:   msg,
@@ -332,6 +358,12 @@ func (p *groupProcessor) handleMessageItem(itemMap map[string]interface{}) {
 
 	// Add message as its own group
 	if msg != nil {
+		// Attach any buffered reasoning to assistant messages
+		if role == "assistant" && p.pendingReasoning != "" {
+			reasoning := p.pendingReasoning
+			msg.ReasoningContent = &reasoning
+			p.pendingReasoning = ""
+		}
 		p.groups = append(p.groups, inputItemGroup{
 			itemType: "message",
 			message:  msg,
@@ -363,8 +395,10 @@ func (p *groupProcessor) flushPendingToolCalls() {
 	p.groups = append(p.groups, inputItemGroup{
 		itemType:  "assistant_tool_calls",
 		toolCalls: p.pendingToolCalls,
+		reasoning: p.pendingReasoning,
 	})
 	p.pendingToolCalls = nil
+	p.pendingReasoning = ""
 }
 
 // convertGroupsToMessages converts grouped items to Chat Completions messages.
@@ -382,9 +416,14 @@ func (c *ResponsesToChatConverter) convertGroupsToMessages(groups []inputItemGro
 
 		case "assistant_tool_calls":
 			// Assistant message with only tool_calls (no content)
+			var reasoningPtr *string
+			if group.reasoning != "" {
+				reasoningPtr = &group.reasoning
+			}
 			messages = append(messages, types.Message{
-				Role:      "assistant",
-				ToolCalls: group.toolCalls,
+				Role:             "assistant",
+				ToolCalls:        group.toolCalls,
+				ReasoningContent: reasoningPtr,
 			})
 
 		case "message":
@@ -396,6 +435,30 @@ func (c *ResponsesToChatConverter) convertGroupsToMessages(groups []inputItemGro
 	}
 
 	return messages
+}
+
+// ensureReasoningOnAllAssistants sets ReasoningContent on all assistant messages
+// to at least "" when the conversation contains any reasoning items. DeepSeek requires
+// the reasoning_content key on every assistant message in multi-turn thinking mode,
+// even if the value is empty.
+func ensureReasoningOnAllAssistants(messages []types.Message) {
+	hasReasoning := false
+	for i := range messages {
+		if messages[i].Role == "assistant" && messages[i].ReasoningContent != nil && *messages[i].ReasoningContent != "" {
+			hasReasoning = true
+			break
+		}
+	}
+	if !hasReasoning {
+		return
+	}
+
+	empty := ""
+	for i := range messages {
+		if messages[i].Role == "assistant" && messages[i].ReasoningContent == nil {
+			messages[i].ReasoningContent = &empty
+		}
+	}
 }
 
 // parseMessageItem extracts a Message from a message input item.
@@ -697,3 +760,4 @@ func (c *ResponsesToChatConverter) convertTool(tool *types.ResponsesTool) *types
 }
 
 // ResponsesToChatTransformer converts OpenAI Responses SSE to Chat Completions format.
+

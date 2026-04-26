@@ -435,3 +435,31 @@ func extractToolResultContent(content interface{}) string {
 		return string(b)
 	}
 }
+
+// ExtractReasoningText extracts the concatenated summary text from a reasoning
+// item's "summary" array. Each summary entry has the form
+// {"type":"summary_text","text":"..."}; all non-empty texts are joined with
+// newlines.
+func ExtractReasoningText(item map[string]interface{}) string {
+	summaryRaw, ok := item["summary"]
+	if !ok {
+		return ""
+	}
+	summaryArray, ok := summaryRaw.([]interface{})
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for _, part := range summaryArray {
+		partMap, ok := part.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if t, _ := partMap["type"].(string); t == "summary_text" {
+			if text, _ := partMap["text"].(string); text != "" {
+				parts = append(parts, text)
+			}
+		}
+	}
+	return strings.Join(parts, "\n")
+}

@@ -3,6 +3,7 @@ package convert
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"ai-proxy/conversation"
@@ -2021,4 +2022,350 @@ func TestResponsesToChatConverter_SetReasoningSplit(t *testing.T) {
 			t.Errorf("ReasoningEffort should be 'high', got '%s'", req.ReasoningEffort)
 		}
 	})
+}
+
+// TestResponsesToChatConverter_ReasoningToReasoningContent tests that reasoning items
+// from previous conversation turns are converted to reasoning_content on assistant messages.
+func TestResponsesToChatConverter_ReasoningToReasoningContent(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "user",
+			"content": "Hello",
+		},
+		map[string]interface{}{
+			"type": "reasoning",
+			"summary": []interface{}{
+				map[string]interface{}{
+					"type": "summary_text",
+					"text": "I need to analyze this request carefully.",
+				},
+			},
+		},
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "assistant",
+			"content": "I'll help you with that.",
+		},
+	}
+
+	body := map[string]interface{}{
+		"model": "deepseek-r1",
+		"input": input,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	converter := NewResponsesToChatConverter()
+	output, err := converter.Convert(bodyBytes)
+	if err != nil {
+		t.Fatalf("Convert returned error: %v", err)
+	}
+
+	var req types.ChatCompletionRequest
+	if err := json.Unmarshal(output, &req); err != nil {
+		t.Fatalf("Failed to parse output: %v", err)
+	}
+
+	// Find the assistant message
+	var assistantMsg *types.Message
+	for i := range req.Messages {
+		if req.Messages[i].Role == "assistant" {
+			assistantMsg = &req.Messages[i]
+			break
+		}
+	}
+
+	if assistantMsg == nil {
+		t.Fatal("Expected assistant message not found")
+	}
+
+	if assistantMsg.ReasoningContent == nil {
+		t.Error("Expected assistant message to have ReasoningContent, got nil")
+	}
+
+	expected := "I need to analyze this request carefully."
+	if *assistantMsg.ReasoningContent != expected {
+		t.Errorf("Expected ReasoningContent %q, got %q", expected, *assistantMsg.ReasoningContent)
+	}
+}
+
+// TestResponsesToChatConverter_ReasoningWithToolCalls tests that reasoning is attached
+// to assistant messages that also contain tool calls.
+func TestResponsesToChatConverter_ReasoningWithToolCalls(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "user",
+			"content": "Check the files",
+		},
+		map[string]interface{}{
+			"type": "reasoning",
+			"summary": []interface{}{
+				map[string]interface{}{
+					"type": "summary_text",
+					"text": "User wants to check files.",
+				},
+			},
+		},
+		map[string]interface{}{
+			"type":      "function_call",
+			"name":      "exec_command",
+			"call_id":   "call_001",
+			"arguments": `{"cmd": "ls"}`,
+		},
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "assistant",
+			"content": "",
+		},
+		map[string]interface{}{
+			"type":    "function_call_output",
+			"call_id": "call_001",
+			"output":  "file1.txt\nfile2.txt",
+		},
+	}
+
+	body := map[string]interface{}{
+		"model": "deepseek-r1",
+		"input": input,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	converter := NewResponsesToChatConverter()
+	output, err := converter.Convert(bodyBytes)
+	if err != nil {
+		t.Fatalf("Convert returned error: %v", err)
+	}
+
+	var req types.ChatCompletionRequest
+	if err := json.Unmarshal(output, &req); err != nil {
+		t.Fatalf("Failed to parse output: %v", err)
+	}
+
+	// Find the assistant message with tool calls
+	var assistantMsg *types.Message
+	for i := range req.Messages {
+		if req.Messages[i].Role == "assistant" && len(req.Messages[i].ToolCalls) > 0 {
+			assistantMsg = &req.Messages[i]
+			break
+		}
+	}
+
+	if assistantMsg == nil {
+		t.Fatal("Expected assistant message with tool calls not found")
+	}
+
+	if assistantMsg.ReasoningContent == nil {
+		t.Error("Expected assistant message with tool calls to have ReasoningContent")
+	}
+
+	expected := "User wants to check files."
+	if *assistantMsg.ReasoningContent != expected {
+		t.Errorf("Expected ReasoningContent %q, got %q", expected, *assistantMsg.ReasoningContent)
+	}
+}
+
+// TestResponsesToChatConverter_ReasoningFlushedWithToolCalls tests that reasoning
+// is preserved when function_calls are flushed without a following assistant message.
+func TestResponsesToChatConverter_ReasoningFlushedWithToolCalls(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "user",
+			"content": "Check the files",
+		},
+		map[string]interface{}{
+			"type": "reasoning",
+			"summary": []interface{}{
+				map[string]interface{}{
+					"type": "summary_text",
+					"text": "I should list the files first.",
+				},
+			},
+		},
+		map[string]interface{}{
+			"type":      "function_call",
+			"name":      "exec_command",
+			"call_id":   "call_001",
+			"arguments": `{"cmd": "ls"}`,
+		},
+		map[string]interface{}{
+			"type":    "function_call_output",
+			"call_id": "call_001",
+			"output":  "file1.txt",
+		},
+	}
+
+	body := map[string]interface{}{
+		"model": "deepseek-r1",
+		"input": input,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	converter := NewResponsesToChatConverter()
+	output, err := converter.Convert(bodyBytes)
+	if err != nil {
+		t.Fatalf("Convert returned error: %v", err)
+	}
+
+	var req types.ChatCompletionRequest
+	if err := json.Unmarshal(output, &req); err != nil {
+		t.Fatalf("Failed to parse output: %v", err)
+	}
+
+	// Find the assistant message with tool calls
+	var assistantMsg *types.Message
+	for i := range req.Messages {
+		if req.Messages[i].Role == "assistant" && len(req.Messages[i].ToolCalls) > 0 {
+			assistantMsg = &req.Messages[i]
+			break
+		}
+	}
+
+	if assistantMsg == nil {
+		t.Fatal("Expected assistant message with tool calls not found")
+	}
+
+	if assistantMsg.ReasoningContent == nil {
+		t.Fatal("Expected assistant message to have ReasoningContent, got nil")
+	}
+
+	expected := "I should list the files first."
+	if *assistantMsg.ReasoningContent != expected {
+		t.Errorf("Expected ReasoningContent %q, got %q", expected, *assistantMsg.ReasoningContent)
+	}
+}
+
+// TestResponsesToChatConverter_ReasoningBackfillEmpty tests that when a conversation
+// has reasoning in turn 1 but not turn 2, the turn 2 assistant message gets
+// reasoning_content: "" (empty string) so DeepSeek doesn't reject the request.
+func TestResponsesToChatConverter_ReasoningBackfillEmpty(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "user",
+			"content": "Hello",
+		},
+		map[string]interface{}{
+			"type": "reasoning",
+			"summary": []interface{}{
+				map[string]interface{}{
+					"type": "summary_text",
+					"text": "Thinking about greeting.",
+				},
+			},
+		},
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "assistant",
+			"content": "Hi there!",
+		},
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "user",
+			"content": "What is 2+2?",
+		},
+		// No reasoning item for this turn
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "assistant",
+			"content": "4",
+		},
+	}
+
+	body := map[string]interface{}{
+		"model": "deepseek-r1",
+		"input": input,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	converter := NewResponsesToChatConverter()
+	output, err := converter.Convert(bodyBytes)
+	if err != nil {
+		t.Fatalf("Convert returned error: %v", err)
+	}
+
+	var req types.ChatCompletionRequest
+	if err := json.Unmarshal(output, &req); err != nil {
+		t.Fatalf("Failed to parse output: %v", err)
+	}
+
+	// Count assistant messages and verify reasoning state
+	assistantCount := 0
+	for i := range req.Messages {
+		if req.Messages[i].Role == "assistant" {
+			assistantCount++
+			if req.Messages[i].ReasoningContent == nil {
+				t.Errorf("Assistant message %d has nil ReasoningContent, expected non-nil (backfill)", assistantCount)
+			}
+		}
+	}
+
+	if assistantCount != 2 {
+		t.Fatalf("Expected 2 assistant messages, got %d", assistantCount)
+	}
+
+	// First assistant should have actual reasoning
+	first := req.Messages[1] // system, user, assistant...
+	if first.ReasoningContent == nil || *first.ReasoningContent != "Thinking about greeting." {
+		t.Errorf("First assistant ReasoningContent wrong: %v", first.ReasoningContent)
+	}
+
+	// Second assistant should have empty string reasoning (backfilled)
+	second := req.Messages[3]
+	if second.ReasoningContent == nil {
+		t.Error("Second assistant ReasoningContent is nil, expected empty string pointer")
+	} else if *second.ReasoningContent != "" {
+		t.Errorf("Second assistant ReasoningContent = %q, expected empty string", *second.ReasoningContent)
+	}
+}
+
+// TestResponsesToChatConverter_NoReasoningBackfillWhenNoneExists tests that when
+// NO reasoning items exist at all, assistant messages keep ReasoningContent = nil
+// (omitted from JSON).
+func TestResponsesToChatConverter_NoReasoningBackfillWhenNoneExists(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "user",
+			"content": "Hello",
+		},
+		map[string]interface{}{
+			"type":    "message",
+			"role":    "assistant",
+			"content": "Hi there!",
+		},
+	}
+
+	body := map[string]interface{}{
+		"model": "gpt-4",
+		"input": input,
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	converter := NewResponsesToChatConverter()
+	output, err := converter.Convert(bodyBytes)
+	if err != nil {
+		t.Fatalf("Convert returned error: %v", err)
+	}
+
+	var req types.ChatCompletionRequest
+	if err := json.Unmarshal(output, &req); err != nil {
+		t.Fatalf("Failed to parse output: %v", err)
+	}
+
+	// Verify assistant message has nil ReasoningContent (not backfilled)
+	for i := range req.Messages {
+		if req.Messages[i].Role == "assistant" {
+			if req.Messages[i].ReasoningContent != nil {
+				t.Errorf("Expected nil ReasoningContent when no reasoning items exist, got %v", req.Messages[i].ReasoningContent)
+			}
+		}
+	}
+
+	// Verify JSON output doesn't contain reasoning_content key
+	jsonOutput := string(output)
+	if strings.Contains(jsonOutput, "reasoning_content") {
+		t.Error("JSON output should not contain reasoning_content when no reasoning items exist")
+	}
 }

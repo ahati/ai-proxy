@@ -1104,6 +1104,23 @@ func convertToOutputItem(item map[string]interface{}) *types.OutputItem {
 		output.Arguments = args
 	}
 
+	// Handle summary field for reasoning type
+	if itemType == "reasoning" {
+		if summaryRaw, ok := item["summary"].([]interface{}); ok {
+			var textParts []string
+			for _, part := range summaryRaw {
+				if partMap, ok := part.(map[string]interface{}); ok {
+					if partType, _ := partMap["type"].(string); partType == "summary_text" {
+						if text, ok := partMap["text"].(string); ok && text != "" {
+							textParts = append(textParts, text)
+						}
+					}
+				}
+			}
+			output.Summary = strings.Join(textParts, "\n")
+		}
+	}
+
 	// Handle content array for message type
 	if itemType == "message" {
 		if content, ok := item["content"].([]map[string]interface{}); ok {
