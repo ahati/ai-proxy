@@ -155,6 +155,7 @@ func (h *ResponsesHandler) TransformRequest(ctx context.Context, body []byte) ([
 		IsPassthrough:    h.route.IsPassthrough,
 		ReasoningSplit:   h.route.ReasoningSplit,
 		Store:            h.shouldStore,
+		SamplingParams:   h.route.SamplingParams,
 	})
 	if err != nil {
 		return nil, err

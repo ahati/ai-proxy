@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"ai-proxy/logging"
 )
 
 // Snapshot holds a consistent configuration state.
@@ -81,6 +83,7 @@ func (m *ConfigManager) Get() *Snapshot {
 // @post Persisted is false after successful update
 func (m *ConfigManager) UpdateSchema(schema *Schema) error {
 	if schema == nil {
+		logging.ErrorMsg("config manager: UpdateSchema called with nil schema")
 		return fmt.Errorf("schema cannot be nil")
 	}
 
@@ -88,6 +91,7 @@ func (m *ConfigManager) UpdateSchema(schema *Schema) error {
 	defer m.writeMu.Unlock()
 
 	if err := Validate(schema); err != nil {
+		logging.ErrorMsg("config manager: schema validation failed: %v", err)
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
@@ -111,6 +115,7 @@ func (m *ConfigManager) UpdateSchema(schema *Schema) error {
 // @post Persisted is true after successful reload
 func (m *ConfigManager) ReloadFromDisk() (*Schema, error) {
 	if m.configFile == "" {
+		logging.ErrorMsg("config manager: ReloadFromDisk called with no config file path")
 		return nil, fmt.Errorf("no config file path configured")
 	}
 
@@ -120,6 +125,7 @@ func (m *ConfigManager) ReloadFromDisk() (*Schema, error) {
 	loader := NewLoader()
 	schema, err := loader.Load(m.configFile)
 	if err != nil {
+		logging.ErrorMsg("config manager: failed to reload config from '%s': %v", m.configFile, err)
 		return nil, fmt.Errorf("failed to reload config: %w", err)
 	}
 
@@ -141,6 +147,7 @@ func (m *ConfigManager) ReloadFromDisk() (*Schema, error) {
 // @post Persisted is true after successful save
 func (m *ConfigManager) SaveToDisk() error {
 	if m.configFile == "" {
+		logging.ErrorMsg("config manager: SaveToDisk called with no config file path")
 		return fmt.Errorf("no config file path configured")
 	}
 
@@ -149,6 +156,7 @@ func (m *ConfigManager) SaveToDisk() error {
 
 	snap := m.snapshot.Load()
 	if snap == nil || snap.Schema == nil {
+		logging.ErrorMsg("config manager: SaveToDisk called with no configuration")
 		return fmt.Errorf("no configuration to save")
 	}
 
@@ -164,10 +172,12 @@ func (m *ConfigManager) SaveToDisk() error {
 	// Marshal schema to pretty-printed JSON
 	data, err := json.MarshalIndent(snap.Schema, "", "  ")
 	if err != nil {
+		logging.ErrorMsg("config manager: failed to marshal config for saving: %v", err)
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
 	if err := os.WriteFile(m.configFile, data, 0644); err != nil {
+		logging.ErrorMsg("config manager: failed to write config file '%s': %v", m.configFile, err)
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 

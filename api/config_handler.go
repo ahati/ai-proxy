@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ai-proxy/config"
+	"ai-proxy/logging"
 
 	"github.com/gin-gonic/gin"
 )
@@ -122,6 +123,7 @@ func (h *ConfigHandler) GetRawConfig(c *gin.Context) {
 
 	data, err := os.ReadFile(configFile)
 	if err != nil {
+		logging.ErrorMsg("config handler: failed to read raw config file '%s': %v", configFile, err)
 		c.JSON(http.StatusInternalServerError, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Failed to read config file: %v", err),
@@ -143,6 +145,7 @@ func (h *ConfigHandler) GetRawConfig(c *gin.Context) {
 func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 	var schema config.Schema
 	if err := c.ShouldBindJSON(&schema); err != nil {
+		logging.ErrorMsg("config handler: invalid JSON in UpdateConfig request: %v", err)
 		c.JSON(http.StatusBadRequest, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Invalid JSON: %v", err),
@@ -154,6 +157,7 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 	resolveEnvVars(&schema)
 
 	if err := h.manager.UpdateSchema(&schema); err != nil {
+		logging.ErrorMsg("config handler: UpdateSchema failed: %v", err)
 		c.JSON(http.StatusBadRequest, apiResponse{
 			OK:    false,
 			Error: err.Error(),
@@ -177,6 +181,7 @@ func (h *ConfigHandler) UpdateConfig(c *gin.Context) {
 func (h *ConfigHandler) PatchModels(c *gin.Context) {
 	var models map[string]config.ModelConfig
 	if err := c.ShouldBindJSON(&models); err != nil {
+		logging.ErrorMsg("config handler: invalid JSON in PatchModels request: %v", err)
 		c.JSON(http.StatusBadRequest, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Invalid JSON: %v", err),
@@ -248,6 +253,7 @@ func (h *ConfigHandler) DeleteModel(c *gin.Context) {
 	delete(merged.Models, name)
 
 	if err := h.manager.UpdateSchema(merged); err != nil {
+		logging.ErrorMsg("config handler: DeleteModel UpdateSchema failed: %v", err)
 		c.JSON(http.StatusBadRequest, apiResponse{
 			OK:    false,
 			Error: err.Error(),
@@ -271,6 +277,7 @@ func (h *ConfigHandler) DeleteModel(c *gin.Context) {
 func (h *ConfigHandler) PatchProviders(c *gin.Context) {
 	var providers []config.Provider
 	if err := c.ShouldBindJSON(&providers); err != nil {
+		logging.ErrorMsg("config handler: invalid JSON in PatchProviders request: %v", err)
 		c.JSON(http.StatusBadRequest, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Invalid JSON: %v", err),
@@ -347,6 +354,7 @@ func (h *ConfigHandler) DeleteProvider(c *gin.Context) {
 		}
 	}
 	if len(referencingModels) > 0 {
+		logging.ErrorMsg("config handler: DeleteProvider failed: provider '%s' still referenced by models %v", name, referencingModels)
 		c.JSON(http.StatusConflict, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Cannot remove provider '%s': still referenced by models %v", name, referencingModels),
@@ -364,6 +372,7 @@ func (h *ConfigHandler) DeleteProvider(c *gin.Context) {
 		}
 	}
 	if !found {
+		logging.ErrorMsg("config handler: DeleteProvider failed: provider '%s' not found", name)
 		c.JSON(http.StatusNotFound, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Provider '%s' not found", name),
@@ -372,6 +381,7 @@ func (h *ConfigHandler) DeleteProvider(c *gin.Context) {
 	}
 
 	if err := h.manager.UpdateSchema(merged); err != nil {
+		logging.ErrorMsg("config handler: DeleteProvider UpdateSchema failed: %v", err)
 		c.JSON(http.StatusBadRequest, apiResponse{
 			OK:    false,
 			Error: err.Error(),
@@ -394,6 +404,7 @@ func (h *ConfigHandler) DeleteProvider(c *gin.Context) {
 func (h *ConfigHandler) ReloadConfig(c *gin.Context) {
 	schema, err := h.manager.ReloadFromDisk()
 	if err != nil {
+		logging.ErrorMsg("config handler: ReloadFromDisk failed: %v", err)
 		c.JSON(http.StatusInternalServerError, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Failed to reload config: %v", err),
@@ -416,6 +427,7 @@ func (h *ConfigHandler) ReloadConfig(c *gin.Context) {
 // @return Save status and the file path.
 func (h *ConfigHandler) SaveConfig(c *gin.Context) {
 	if err := h.manager.SaveToDisk(); err != nil {
+		logging.ErrorMsg("config handler: SaveToDisk failed: %v", err)
 		c.JSON(http.StatusInternalServerError, apiResponse{
 			OK:    false,
 			Error: fmt.Sprintf("Failed to save config: %v", err),
@@ -497,11 +509,13 @@ func maskAPIKey(key string) string {
 func deepCopySchema(s *config.Schema) *config.Schema {
 	data, err := json.Marshal(s)
 	if err != nil {
+		logging.ErrorMsg("config handler: deepCopySchema marshal failed: %v", err)
 		// Fallback: return a new empty schema
 		return &config.Schema{}
 	}
 	var copy config.Schema
 	if err := json.Unmarshal(data, &copy); err != nil {
+		logging.ErrorMsg("config handler: deepCopySchema unmarshal failed: %v", err)
 		return &config.Schema{}
 	}
 	return &copy

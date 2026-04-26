@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"ai-proxy/config"
 )
 
 // TestBuildRequestPipeline_Validation tests that invalid configs are rejected.
@@ -519,4 +521,245 @@ func TestBuildRequestPipeline_ChainStepsStopsOnError(t *testing.T) {
 	if len(callOrder) != 2 || callOrder[0] != 1 || callOrder[1] != 2 {
 		t.Errorf("call order = %v, want [1 2] (step3 should not run)", callOrder)
 	}
+}
+
+// TestStepInjectSamplingParams tests the sampling parameter injection.
+func TestStepInjectSamplingParams(t *testing.T) {
+	tests := []struct {
+		name            string
+		params          *config.SamplingParams
+		body            string
+		wantTemperature interface{}
+		wantTopP        interface{}
+		wantTopK        interface{}
+		wantPresence    interface{}
+		wantFrequency   interface{}
+	}{
+		{
+			name:            "nil params returns unchanged",
+			params:          nil,
+			body:            `{"model": "test", "messages": []}`,
+			wantTemperature: nil,
+		},
+		{
+			name:            "empty params returns unchanged",
+			params:          &config.SamplingParams{},
+			body:            `{"model": "test", "messages": []}`,
+			wantTemperature: nil,
+		},
+		{
+			name:            "inject temperature when not set (override default true)",
+			params:          &config.SamplingParams{Temperature: float64Ptr(0.7)},
+			body:            `{"model": "test", "messages": []}`,
+			wantTemperature: 0.7,
+		},
+		{
+			name:            "override temperature when already set (override default true)",
+			params:          &config.SamplingParams{Temperature: float64Ptr(0.7)},
+			body:            `{"model": "test", "messages": [], "temperature": 0.3}`,
+			wantTemperature: 0.7, // config overrides client
+		},
+		{
+			name: "do not override when override=false",
+			params: &config.SamplingParams{
+				Override:    boolPtr(false),
+				Temperature: float64Ptr(0.7),
+			},
+			body:            `{"model": "test", "messages": [], "temperature": 0.3}`,
+			wantTemperature: 0.3, // client wins
+		},
+		{
+			name: "apply when client not set and override=false",
+			params: &config.SamplingParams{
+				Override:    boolPtr(false),
+				Temperature: float64Ptr(0.7),
+			},
+			body:            `{"model": "test", "messages": []}`,
+			wantTemperature: 0.7, // config applies when client doesn't set
+		},
+		{
+			name: "inject all params",
+			params: &config.SamplingParams{
+				Temperature:      float64Ptr(0.8),
+				TopP:             float64Ptr(0.9),
+				TopK:             intPtr(40),
+				PresencePenalty:  float64Ptr(0.2),
+				FrequencyPenalty: float64Ptr(0.1),
+			},
+			body:            `{"model": "test", "messages": []}`,
+			wantTemperature: 0.8,
+			wantTopP:        0.9,
+			wantTopK:        40,
+			wantPresence:    0.2,
+			wantFrequency:   0.1,
+		},
+		{
+			name: "partial override with override=true",
+			params: &config.SamplingParams{
+				Temperature: float64Ptr(0.5),
+				TopP:        float64Ptr(0.95),
+			},
+			body:            `{"model": "test", "messages": [], "temperature": 0.9, "top_k": 30}`,
+			wantTemperature: 0.5,  // overridden
+			wantTopP:        0.95, // injected
+			wantTopK:        30,   // client value preserved (not in params)
+		},
+		{
+			name: "partial override with override=false",
+			params: &config.SamplingParams{
+				Override:    boolPtr(false),
+				Temperature: float64Ptr(0.5),
+				TopP:        float64Ptr(0.95),
+			},
+			body:            `{"model": "test", "messages": [], "temperature": 0.9}`,
+			wantTemperature: 0.9,  // client wins
+			wantTopP:        0.95, // config applies (client didn't set)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			step := stepInjectSamplingParams(tt.params)
+			result, err := step(context.Background(), []byte(tt.body))
+			if err != nil {
+				t.Fatalf("stepInjectSamplingParams() error = %v", err)
+			}
+
+			var req map[string]interface{}
+			if err := json.Unmarshal(result, &req); err != nil {
+				t.Fatalf("failed to unmarshal result: %v", err)
+			}
+
+			// Check temperature
+			if tt.wantTemperature != nil {
+				if val, ok := req["temperature"].(float64); !ok || val != tt.wantTemperature {
+					t.Errorf("temperature = %v, want %v", req["temperature"], tt.wantTemperature)
+				}
+			} else if _, ok := req["temperature"]; ok {
+				t.Errorf("temperature should not be set, got %v", req["temperature"])
+			}
+
+			// Check top_p
+			if tt.wantTopP != nil {
+				if val, ok := req["top_p"].(float64); !ok || val != tt.wantTopP {
+					t.Errorf("top_p = %v, want %v", req["top_p"], tt.wantTopP)
+				}
+			}
+
+			// Check top_k (JSON numbers are float64)
+			if tt.wantTopK != nil {
+				topKVal, ok := req["top_k"].(float64)
+				if !ok || int(topKVal) != tt.wantTopK {
+					t.Errorf("top_k = %v, want %v", req["top_k"], tt.wantTopK)
+				}
+			}
+
+			// Check presence_penalty
+			if tt.wantPresence != nil {
+				if val, ok := req["presence_penalty"].(float64); !ok || val != tt.wantPresence {
+					t.Errorf("presence_penalty = %v, want %v", req["presence_penalty"], tt.wantPresence)
+				}
+			}
+
+			// Check frequency_penalty
+			if tt.wantFrequency != nil {
+				if val, ok := req["frequency_penalty"].(float64); !ok || val != tt.wantFrequency {
+					t.Errorf("frequency_penalty = %v, want %v", req["frequency_penalty"], tt.wantFrequency)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildRequestPipeline_WithSamplingParams tests the full pipeline with
+// sampling params integration.
+func TestBuildRequestPipeline_WithSamplingParams(t *testing.T) {
+	cfg := RequestConfig{
+		DownstreamFormat: "openai",
+		UpstreamFormat:   "openai",
+		ResolvedModel:    "upstream-model",
+		IsPassthrough:    false,
+		SamplingParams: &config.SamplingParams{
+			Temperature: float64Ptr(0.7),
+			TopP:        float64Ptr(0.95),
+		},
+	}
+
+	tf, err := BuildRequestPipeline(cfg)
+	if err != nil {
+		t.Fatalf("BuildRequestPipeline() error = %v", err)
+	}
+
+	body := `{"model": "original", "stream": true, "messages": [{"role": "user", "content": "hi"}]}`
+	result, err := tf(context.Background(), []byte(body))
+	if err != nil {
+		t.Fatalf("transform() error = %v", err)
+	}
+
+	var req map[string]interface{}
+	if err := json.Unmarshal(result, &req); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	// Model should be updated
+	if req["model"] != "upstream-model" {
+		t.Errorf("model = %v, want upstream-model", req["model"])
+	}
+
+	// Sampling params should be injected
+	if req["temperature"] != 0.7 {
+		t.Errorf("temperature = %v, want 0.7", req["temperature"])
+	}
+	if req["top_p"] != 0.95 {
+		t.Errorf("top_p = %v, want 0.95", req["top_p"])
+	}
+}
+
+// TestBuildRequestPipeline_SamplingParamsPassthrough tests that sampling params
+// are injected even in passthrough mode.
+func TestBuildRequestPipeline_SamplingParamsPassthrough(t *testing.T) {
+	cfg := RequestConfig{
+		DownstreamFormat: "openai",
+		UpstreamFormat:   "openai",
+		ResolvedModel:    "upstream-model",
+		IsPassthrough:    true,
+		SamplingParams: &config.SamplingParams{
+			Temperature: float64Ptr(0.5),
+		},
+	}
+
+	tf, err := BuildRequestPipeline(cfg)
+	if err != nil {
+		t.Fatalf("BuildRequestPipeline() error = %v", err)
+	}
+
+	body := `{"model": "original", "stream": true, "messages": []}`
+	result, err := tf(context.Background(), []byte(body))
+	if err != nil {
+		t.Fatalf("transform() error = %v", err)
+	}
+
+	var req map[string]interface{}
+	if err := json.Unmarshal(result, &req); err != nil {
+		t.Fatalf("failed to unmarshal result: %v", err)
+	}
+
+	// Model should be updated
+	if req["model"] != "upstream-model" {
+		t.Errorf("model = %v, want upstream-model", req["model"])
+	}
+
+	// Sampling params should be injected
+	if req["temperature"] != 0.5 {
+		t.Errorf("temperature = %v, want 0.5", req["temperature"])
+	}
+}
+
+// Helper functions for tests
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

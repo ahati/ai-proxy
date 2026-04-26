@@ -164,7 +164,7 @@ func TestSchemaJSONUnmarshal(t *testing.T) {
 		if gpt4Config.Model != "gpt-4-turbo" {
 			t.Errorf("Expected model 'gpt-4-turbo', got %q", gpt4Config.Model)
 		}
-		if !gpt4Config.KimiToolCallTransform {
+		if gpt4Config.KimiToolCallTransform == nil || !*gpt4Config.KimiToolCallTransform {
 			t.Error("Expected KimiToolCallTransform to be true")
 		}
 	}
@@ -176,7 +176,7 @@ func TestSchemaJSONUnmarshal(t *testing.T) {
 		if claudeConfig.Provider != "anthropic-main" {
 			t.Errorf("Expected model provider 'anthropic-main', got %q", claudeConfig.Provider)
 		}
-		if claudeConfig.KimiToolCallTransform {
+		if claudeConfig.KimiToolCallTransform != nil && *claudeConfig.KimiToolCallTransform {
 			t.Error("Expected KimiToolCallTransform to be false")
 		}
 	}
@@ -260,7 +260,7 @@ func TestSchemaJSONUnmarshalPartial(t *testing.T) {
 	if !ok {
 		t.Error("Expected 'test-model' to exist in models")
 	} else {
-		if testModel.KimiToolCallTransform {
+		if testModel.KimiToolCallTransform != nil && *testModel.KimiToolCallTransform {
 			t.Error("Expected KimiToolCallTransform to default to false")
 		}
 	}
@@ -279,7 +279,7 @@ func TestSchemaJSONMarshal(t *testing.T) {
 			"test-model": {
 				Provider:              "test-provider",
 				Model:                 "test-model-v1",
-				KimiToolCallTransform: true,
+				KimiToolCallTransform: Bool(true),
 			},
 		},
 		Fallback: FallbackConfig{
@@ -403,7 +403,7 @@ func TestModelConfigJSONUnmarshal(t *testing.T) {
 	if config.Model != "gpt-4" {
 		t.Errorf("Model = %q, want 'gpt-4'", config.Model)
 	}
-	if !config.KimiToolCallTransform {
+	if config.KimiToolCallTransform == nil || !*config.KimiToolCallTransform {
 		t.Error("KimiToolCallTransform should be true")
 	}
 }
@@ -455,4 +455,284 @@ func TestProviderGetEndpoint(t *testing.T) {
 	if got := provider.GetEndpoint("unknown"); got != "" {
 		t.Errorf("GetEndpoint(unknown) = %q, want empty string", got)
 	}
+}
+
+func TestSamplingParamsShouldOverride(t *testing.T) {
+	tests := []struct {
+		name   string
+		params *SamplingParams
+		want   bool
+	}{
+		{
+			name:   "nil params returns true",
+			params: nil,
+			want:   true,
+		},
+		{
+			name:   "Override nil returns true (default)",
+			params: &SamplingParams{Temperature: floatPtr(0.7)},
+			want:   true,
+		},
+		{
+			name:   "Override true returns true",
+			params: &SamplingParams{Override: boolPtr(true)},
+			want:   true,
+		},
+		{
+			name:   "Override false returns false",
+			params: &SamplingParams{Override: boolPtr(false)},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.params.ShouldOverride()
+			if got != tt.want {
+				t.Errorf("ShouldOverride() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSamplingParamsHasParams(t *testing.T) {
+	tests := []struct {
+		name   string
+		params *SamplingParams
+		want   bool
+	}{
+		{
+			name:   "nil params returns false",
+			params: nil,
+			want:   false,
+		},
+		{
+			name:   "empty params returns false",
+			params: &SamplingParams{},
+			want:   false,
+		},
+		{
+			name:   "Temperature set returns true",
+			params: &SamplingParams{Temperature: floatPtr(0.7)},
+			want:   true,
+		},
+		{
+			name:   "TopP set returns true",
+			params: &SamplingParams{TopP: floatPtr(0.9)},
+			want:   true,
+		},
+		{
+			name:   "TopK set returns true",
+			params: &SamplingParams{TopK: intPtr(50)},
+			want:   true,
+		},
+		{
+			name:   "PresencePenalty set returns true",
+			params: &SamplingParams{PresencePenalty: floatPtr(0.5)},
+			want:   true,
+		},
+		{
+			name:   "FrequencyPenalty set returns true",
+			params: &SamplingParams{FrequencyPenalty: floatPtr(0.3)},
+			want:   true,
+		},
+		{
+			name: "all params set returns true",
+			params: &SamplingParams{
+				Temperature:      floatPtr(0.7),
+				TopP:             floatPtr(0.9),
+				TopK:             intPtr(50),
+				PresencePenalty:  floatPtr(0.5),
+				FrequencyPenalty: floatPtr(0.3),
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.params.HasParams()
+			if got != tt.want {
+				t.Errorf("HasParams() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSamplingParamsJSONUnmarshal(t *testing.T) {
+	tests := []struct {
+		name     string
+		jsonData string
+		want     SamplingParams
+	}{
+		{
+			name:     "temperature only",
+			jsonData: `{"temperature": 0.7}`,
+			want:     SamplingParams{Temperature: floatPtr(0.7)},
+		},
+		{
+			name:     "override false",
+			jsonData: `{"override": false, "temperature": 0.5}`,
+			want:     SamplingParams{Override: boolPtr(false), Temperature: floatPtr(0.5)},
+		},
+		{
+			name:     "override true",
+			jsonData: `{"override": true, "top_p": 0.95}`,
+			want:     SamplingParams{Override: boolPtr(true), TopP: floatPtr(0.95)},
+		},
+		{
+			name: "all params",
+			jsonData: `{
+				"temperature": 0.8,
+				"top_p": 0.9,
+				"top_k": 40,
+				"presence_penalty": 0.2,
+				"frequency_penalty": 0.1
+			}`,
+			want: SamplingParams{
+				Temperature:      floatPtr(0.8),
+				TopP:             floatPtr(0.9),
+				TopK:             intPtr(40),
+				PresencePenalty:  floatPtr(0.2),
+				FrequencyPenalty: floatPtr(0.1),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got SamplingParams
+			err := json.Unmarshal([]byte(tt.jsonData), &got)
+			if err != nil {
+				t.Fatalf("Failed to unmarshal: %v", err)
+			}
+
+			// Compare Override
+			if (got.Override == nil && tt.want.Override != nil) ||
+				(got.Override != nil && tt.want.Override == nil) ||
+				(got.Override != nil && tt.want.Override != nil && *got.Override != *tt.want.Override) {
+				t.Errorf("Override mismatch: got %v, want %v", got.Override, tt.want.Override)
+			}
+
+			// Compare Temperature
+			if (got.Temperature == nil && tt.want.Temperature != nil) ||
+				(got.Temperature != nil && tt.want.Temperature == nil) ||
+				(got.Temperature != nil && tt.want.Temperature != nil && *got.Temperature != *tt.want.Temperature) {
+				t.Errorf("Temperature mismatch: got %v, want %v", got.Temperature, tt.want.Temperature)
+			}
+
+			// Compare TopP
+			if (got.TopP == nil && tt.want.TopP != nil) ||
+				(got.TopP != nil && tt.want.TopP == nil) ||
+				(got.TopP != nil && tt.want.TopP != nil && *got.TopP != *tt.want.TopP) {
+				t.Errorf("TopP mismatch: got %v, want %v", got.TopP, tt.want.TopP)
+			}
+
+			// Compare TopK
+			if (got.TopK == nil && tt.want.TopK != nil) ||
+				(got.TopK != nil && tt.want.TopK == nil) ||
+				(got.TopK != nil && tt.want.TopK != nil && *got.TopK != *tt.want.TopK) {
+				t.Errorf("TopK mismatch: got %v, want %v", got.TopK, tt.want.TopK)
+			}
+
+			// Compare PresencePenalty
+			if (got.PresencePenalty == nil && tt.want.PresencePenalty != nil) ||
+				(got.PresencePenalty != nil && tt.want.PresencePenalty == nil) ||
+				(got.PresencePenalty != nil && tt.want.PresencePenalty != nil && *got.PresencePenalty != *tt.want.PresencePenalty) {
+				t.Errorf("PresencePenalty mismatch: got %v, want %v", got.PresencePenalty, tt.want.PresencePenalty)
+			}
+
+			// Compare FrequencyPenalty
+			if (got.FrequencyPenalty == nil && tt.want.FrequencyPenalty != nil) ||
+				(got.FrequencyPenalty != nil && tt.want.FrequencyPenalty == nil) ||
+				(got.FrequencyPenalty != nil && tt.want.FrequencyPenalty != nil && *got.FrequencyPenalty != *tt.want.FrequencyPenalty) {
+				t.Errorf("FrequencyPenalty mismatch: got %v, want %v", got.FrequencyPenalty, tt.want.FrequencyPenalty)
+			}
+		})
+	}
+}
+
+func TestModelConfigWithSamplingParams(t *testing.T) {
+	jsonData := `{
+		"provider": "test-provider",
+		"model": "test-model",
+		"sampling_params": {
+			"temperature": 0.7,
+			"top_p": 0.95
+		}
+	}`
+
+	var config ModelConfig
+	err := json.Unmarshal([]byte(jsonData), &config)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if config.Provider != "test-provider" {
+		t.Errorf("Provider = %q, want 'test-provider'", config.Provider)
+	}
+
+	if config.SamplingParams == nil {
+		t.Fatal("SamplingParams should not be nil")
+	}
+
+	if config.SamplingParams.Temperature == nil || *config.SamplingParams.Temperature != 0.7 {
+		t.Errorf("Temperature = %v, want 0.7", config.SamplingParams.Temperature)
+	}
+
+	if config.SamplingParams.TopP == nil || *config.SamplingParams.TopP != 0.95 {
+		t.Errorf("TopP = %v, want 0.95", config.SamplingParams.TopP)
+	}
+
+	// Override should be nil (default true)
+	if config.SamplingParams.Override != nil {
+		t.Errorf("Override should be nil (default), got %v", config.SamplingParams.Override)
+	}
+}
+
+func TestFallbackConfigWithSamplingParams(t *testing.T) {
+	jsonData := `{
+		"enabled": true,
+		"provider": "fallback-provider",
+		"model": "fallback-model",
+		"sampling_params": {
+			"override": false,
+			"temperature": 0.5
+		}
+	}`
+
+	var config FallbackConfig
+	err := json.Unmarshal([]byte(jsonData), &config)
+	if err != nil {
+		t.Fatalf("Failed to unmarshal: %v", err)
+	}
+
+	if !config.Enabled {
+		t.Error("Enabled should be true")
+	}
+
+	if config.SamplingParams == nil {
+		t.Fatal("SamplingParams should not be nil")
+	}
+
+	if config.SamplingParams.Override == nil || *config.SamplingParams.Override != false {
+		t.Errorf("Override = %v, want false", config.SamplingParams.Override)
+	}
+
+	if config.SamplingParams.Temperature == nil || *config.SamplingParams.Temperature != 0.5 {
+		t.Errorf("Temperature = %v, want 0.5", config.SamplingParams.Temperature)
+	}
+}
+
+// Helper functions
+func floatPtr(v float64) *float64 {
+	return &v
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"ai-proxy/logging"
 )
 
 // Loader handles loading and validating configuration from JSON files.
@@ -29,15 +31,18 @@ func NewLoader() *Loader {
 func (l *Loader) Load(path string) (*Schema, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
+		logging.ErrorMsg("config loader: failed to read config file '%s': %v", path, err)
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	var schema Schema
 	if err := json.Unmarshal(data, &schema); err != nil {
+		logging.ErrorMsg("config loader: failed to parse config JSON from '%s': %v", path, err)
 		return nil, fmt.Errorf("failed to parse config JSON: %w", err)
 	}
 
 	if err := Validate(&schema); err != nil {
+		logging.ErrorMsg("config loader: validation failed for config '%s': %v", path, err)
 		return nil, err
 	}
 

@@ -111,6 +111,7 @@ func (h *CompletionsHandler) TransformRequest(ctx context.Context, body []byte) 
 		ResolvedModel:    h.route.Model,
 		IsPassthrough:    h.route.IsPassthrough,
 		ReasoningSplit:   h.route.ReasoningSplit,
+		SamplingParams:   h.route.SamplingParams,
 	})
 	if err != nil {
 		return body, nil

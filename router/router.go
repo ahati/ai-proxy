@@ -38,7 +38,9 @@ type ResolvedRoute struct {
 	ReasoningSplit bool
 	// IsPassthrough indicates when no protocol transformation is needed.
 	// True when incoming protocol matches output protocol (passthrough mode).
-	IsPassthrough bool
+	// SamplingParams contains optional sampling parameters to inject.
+	SamplingParams *config.SamplingParams
+	IsPassthrough  bool
 }
 
 // router implements the Router interface.
@@ -68,34 +70,42 @@ func NewRouter(s *config.Schema) (Router, error) {
 }
 
 // Resolve resolves a model name to a route with provider information.
-// It first checks for an exact model match in the schema.
+// It first checks for an exact model match in the schema, following recursive
+// model references (when Model field matches another key in Models) and merging
+// properties along the chain. Alias properties override base properties.
 // If not found and fallback is enabled, it uses the fallback configuration.
 // Returns an error if the model is unknown and no fallback is available.
 //
 // @pre modelName must not be empty
-// @post returned OutputProtocol is determined by modelConfig.Type, fallback.Type, or provider's default
+// @post returned OutputProtocol is determined by merged modelConfig.Type, fallback.Type, or provider's default
 // @post IsPassthrough is false when returned (use ResolveWithProtocol for passthrough detection)
 func (r *router) Resolve(modelName string) (*ResolvedRoute, error) {
-	// Check for exact model match
+	// Check for exact model match with recursive resolution
 	if modelConfig, ok := r.schema.Models[modelName]; ok {
-		provider, ok := r.providersMap[modelConfig.Provider]
+		merged, upstreamModel, err := r.resolveModelChain(modelName, modelConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		provider, ok := r.providersMap[merged.Provider]
 		if !ok {
-			return nil, fmt.Errorf("provider '%s' not found for model '%s'", modelConfig.Provider, modelName)
+			return nil, fmt.Errorf("provider '%s' not found for model '%s'", merged.Provider, modelName)
 		}
 
 		// Determine output protocol
 		outputProtocol := provider.GetDefaultProtocol() // default to provider's default
-		if modelConfig.Type != "" {
-			outputProtocol = modelConfig.Type
+		if merged.Type != "" {
+			outputProtocol = merged.Type
 		}
 
 		return &ResolvedRoute{
 			Provider:              provider,
-			Model:                 modelConfig.Model,
+			Model:                 upstreamModel,
 			OutputProtocol:        outputProtocol,
-			KimiToolCallTransform: modelConfig.KimiToolCallTransform,
-			GLM5ToolCallTransform: modelConfig.GLM5ToolCallTransform,
-			ReasoningSplit:        modelConfig.ReasoningSplit,
+			KimiToolCallTransform: derefBool(merged.KimiToolCallTransform),
+			GLM5ToolCallTransform: derefBool(merged.GLM5ToolCallTransform),
+			ReasoningSplit:        derefBool(merged.ReasoningSplit),
+			SamplingParams:        merged.SamplingParams,
 			IsPassthrough:         false,
 		}, nil
 	}
@@ -124,12 +134,109 @@ func (r *router) Resolve(modelName string) (*ResolvedRoute, error) {
 			KimiToolCallTransform: r.schema.Fallback.KimiToolCallTransform,
 			GLM5ToolCallTransform: r.schema.Fallback.GLM5ToolCallTransform,
 			ReasoningSplit:        r.schema.Fallback.ReasoningSplit,
+			SamplingParams:        r.schema.Fallback.SamplingParams,
 			IsPassthrough:         false,
 		}, nil
 	}
 
 	// No match and no fallback
 	return nil, fmt.Errorf("unknown model: '%s'", modelName)
+}
+
+// resolveModelChain follows model references recursively and returns the merged
+// configuration and the final upstream model identifier.
+//
+// If the Model field of a config matches another key in schema.Models, the
+// chain continues. Properties are merged with alias values overriding base values.
+// Cycle detection prevents infinite recursion.
+//
+// Self-reference (Model == current key) is treated as a leaf, not a cycle,
+// because it simply means the upstream model ID matches the alias name.
+func (r *router) resolveModelChain(modelName string, initialConfig config.ModelConfig) (config.ModelConfig, string, error) {
+	chain := []config.ModelConfig{initialConfig}
+	visited := map[string]bool{modelName: true}
+
+	currentName := modelName
+	current := initialConfig
+	for {
+		nextName := current.Model
+		if nextName == "" {
+			// Leaf: empty model field, use empty string as upstream model
+			break
+		}
+
+		// Self-reference: the upstream model ID happens to match this config's key.
+		// Treat as a leaf, not a cycle.
+		if nextName == currentName {
+			break
+		}
+
+		nextConfig, ok := r.schema.Models[nextName]
+		if !ok {
+			// Leaf: model field is not a key in Models map
+			break
+		}
+
+		if visited[nextName] {
+			return config.ModelConfig{}, "", fmt.Errorf(
+				"model resolution cycle detected: '%s' references '%s' which was already visited",
+				modelName, nextName,
+			)
+		}
+
+		visited[nextName] = true
+		chain = append(chain, nextConfig)
+		currentName = nextName
+		current = nextConfig
+	}
+
+	merged := mergeModelConfigs(chain)
+	return merged, current.Model, nil
+}
+
+// mergeModelConfigs merges a chain of model configs, with later configs (bases)
+// providing defaults and earlier configs (aliases) overriding them.
+// String fields: non-empty overrides. Bool fields: non-nil overrides.
+func mergeModelConfigs(chain []config.ModelConfig) config.ModelConfig {
+	if len(chain) == 0 {
+		return config.ModelConfig{}
+	}
+
+	// Start with the deepest base (last in chain)
+	merged := chain[len(chain)-1]
+
+	// Walk backwards from second-to-last to first, overlaying alias properties
+	for i := len(chain) - 2; i >= 0; i-- {
+		alias := chain[i]
+		if alias.Provider != "" {
+			merged.Provider = alias.Provider
+		}
+		if alias.Type != "" {
+			merged.Type = alias.Type
+		}
+		if alias.KimiToolCallTransform != nil {
+			merged.KimiToolCallTransform = alias.KimiToolCallTransform
+		}
+		if alias.GLM5ToolCallTransform != nil {
+			merged.GLM5ToolCallTransform = alias.GLM5ToolCallTransform
+		}
+		if alias.ReasoningSplit != nil {
+			merged.ReasoningSplit = alias.ReasoningSplit
+		}
+		if alias.SamplingParams != nil {
+			merged.SamplingParams = alias.SamplingParams
+		}
+	}
+
+	return merged
+}
+
+// derefBool returns the value of a *bool, defaulting to false if nil.
+func derefBool(b *bool) bool {
+	if b == nil {
+		return false
+	}
+	return *b
 }
 
 // ResolveWithProtocol resolves a model name with incoming protocol context.

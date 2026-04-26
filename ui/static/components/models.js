@@ -24,6 +24,7 @@ async function renderModels() {
                                 h('th', {}, 'Upstream Model'),
                                 h('th', {}, 'Type'),
                                 h('th', {}, 'Transforms'),
+                                h('th', {}, 'Sampling'),
                                 h('th', {}, 'Actions')
                             )
                         ),
@@ -39,6 +40,7 @@ async function renderModels() {
                                     mc.reasoning_split ? 'ReasoningSplit' : '',
                                     (!mc.kimi_tool_call_transform && !mc.glm5_tool_call_transform && !mc.reasoning_split) ? '—' : ''
                                 ),
+                                h('td', {}, formatSamplingParams(mc.sampling_params)),
                                 h('td', {},
                                     h('button', { className: 'btn-secondary btn-sm', style: 'margin-right:0.5rem',
                                         onclick: () => showModelForm(providers, name, mc) }, 'Edit'),
@@ -56,6 +58,19 @@ async function renderModels() {
     }
 }
 
+// Helper to format sampling params for display
+function formatSamplingParams(sp) {
+    if (!sp) return '—';
+    const parts = [];
+    if (sp.temperature !== undefined && sp.temperature !== null) parts.push(`temp=${sp.temperature}`);
+    if (sp.top_p !== undefined && sp.top_p !== null) parts.push(`top_p=${sp.top_p}`);
+    if (sp.top_k !== undefined && sp.top_k !== null) parts.push(`top_k=${sp.top_k}`);
+    if (sp.presence_penalty !== undefined && sp.presence_penalty !== null) parts.push(`pres=${sp.presence_penalty}`);
+    if (sp.frequency_penalty !== undefined && sp.frequency_penalty !== null) parts.push(`freq=${sp.frequency_penalty}`);
+    if (sp.override === false) parts.push('↔'); // client-wins indicator
+    return parts.join(', ') || '—';
+}
+
 function showModelForm(providers, name = '', mc = null) {
     const isNew = !mc;
     const overlay = h('div', { style: 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:50;display:flex;align-items:center;justify-content:center' });
@@ -63,6 +78,20 @@ function showModelForm(providers, name = '', mc = null) {
     const providerOptions = providers.map(p =>
         h('option', { value: p, ...(mc?.provider === p ? { selected: '' } : {}) }, p)
     );
+
+    // Helper for number input field
+    const numField = (label, id, value, placeholder, attrs = '') =>
+        h('div', { className: 'form-group' },
+            h('label', { for: id, style: 'font-size:0.8rem' }, label),
+            h('input', {
+                type: 'number',
+                id,
+                value: value !== undefined && value !== null ? value : '',
+                placeholder,
+                style: 'width:100%',
+                ...(attrs ? { [attrs.split('=')[0].replace(/"/g, '')]: attrs.split('=')[1]?.replace(/"/g, '') } : {})
+            })
+        );
 
     const form = h('div', { className: 'card', style: 'width:500px;max-height:90vh;overflow-y:auto' },
         h('h3', { className: 'card-title', style: 'margin-bottom:1rem' }, isNew ? 'Add Model' : `Edit: ${name}`),
@@ -94,6 +123,29 @@ function showModelForm(providers, name = '', mc = null) {
             )
         ),
 
+        // Sampling Parameters Section (collapsible)
+        h('details', {
+            id: 'sampling-details',
+            style: 'margin-top:1rem',
+            ...(mc?.sampling_params ? { open: '' } : {})
+        },
+            h('summary', {
+                style: 'cursor:pointer;font-size:0.9rem;color:var(--text-secondary);margin-bottom:0.5rem;user-select:none'
+            }, 'Sampling Parameters'),
+            h('div', { style: 'padding:0.5rem 0' },
+                // Override toggle (default ON = config wins)
+                toggle('sampling-override', 'Override client values (default: config wins)',
+                    mc?.sampling_params?.override !== false),
+                h('div', { className: 'grid-2', style: 'margin-top:0.75rem' },
+                    numField('Temperature', 'sampling-temp', mc?.sampling_params?.temperature, '0-2'),
+                    numField('Top P', 'sampling-topp', mc?.sampling_params?.top_p, '0-1'),
+                    numField('Top K', 'sampling-topk', mc?.sampling_params?.top_k, '1-100'),
+                    numField('Presence Penalty', 'sampling-presence', mc?.sampling_params?.presence_penalty, '-2 to 2'),
+                    numField('Frequency Penalty', 'sampling-freq', mc?.sampling_params?.frequency_penalty, '-2 to 2')
+                )
+            )
+        ),
+
         h('div', { className: 'btn-group', style: 'margin-top:1.5rem' },
             h('button', { className: 'btn-primary', onclick: () => saveModel(isNew) }, 'Save'),
             h('button', { className: 'btn-secondary', onclick: () => overlay.remove() }, 'Cancel')
@@ -107,6 +159,31 @@ function showModelForm(providers, name = '', mc = null) {
     document.body.appendChild(overlay);
 }
 
+// Helper to collect sampling params from form
+function collectSamplingParams() {
+    const tempEl = document.getElementById('sampling-temp');
+    const topPEl = document.getElementById('sampling-topp');
+    const topKEl = document.getElementById('sampling-topk');
+    const presenceEl = document.getElementById('sampling-presence');
+    const freqEl = document.getElementById('sampling-freq');
+    const overrideEl = document.getElementById('sampling-override');
+
+    const params = {};
+
+    // Only include if at least one param is set
+    if (tempEl?.value !== '') params.temperature = parseFloat(tempEl.value);
+    if (topPEl?.value !== '') params.top_p = parseFloat(topPEl.value);
+    if (topKEl?.value !== '') params.top_k = parseInt(topKEl.value);
+    if (presenceEl?.value !== '') params.presence_penalty = parseFloat(presenceEl.value);
+    if (freqEl?.value !== '') params.frequency_penalty = parseFloat(freqEl.value);
+
+    // Only set override if false (true is default)
+    if (overrideEl && !overrideEl.checked) params.override = false;
+
+    // Return undefined if no params are set
+    return Object.keys(params).length > 0 ? params : undefined;
+}
+
 async function saveModel(isNew) {
     const name = document.getElementById('model-name').value.trim();
     const provider = document.getElementById('model-provider').value;
@@ -115,6 +192,7 @@ async function saveModel(isNew) {
     const kimi = document.getElementById('model-kimi').checked;
     const glm5 = document.getElementById('model-glm5').checked;
     const reasoning = document.getElementById('model-reasoning').checked;
+    const samplingParams = collectSamplingParams();
 
     if (!name || !provider || !model) {
         showToast('Name, provider, and upstream model are required', 'error');
@@ -126,6 +204,7 @@ async function saveModel(isNew) {
         kimi_tool_call_transform: kimi,
         glm5_tool_call_transform: glm5,
         reasoning_split: reasoning,
+        sampling_params: samplingParams,
     };
 
     try {

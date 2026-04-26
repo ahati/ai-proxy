@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strings"
 	"testing"
 
 	"ai-proxy/config"
@@ -35,12 +36,12 @@ func TestResolve_ExactModelMatch(t *testing.T) {
 			"gpt-4": {
 				Provider:              "openai",
 				Model:                 "gpt-4-turbo",
-				KimiToolCallTransform: false,
+				KimiToolCallTransform: config.Bool(false),
 			},
 			"claude": {
 				Provider:              "anthropic",
 				Model:                 "claude-3-opus",
-				KimiToolCallTransform: true,
+				KimiToolCallTransform: config.Bool(true),
 			},
 		},
 	}
@@ -690,5 +691,339 @@ func TestResolveWithProtocol_FallbackWithAutoType(t *testing.T) {
 	}
 	if route.IsPassthrough != true {
 		t.Error("expected IsPassthrough to be true for fallback with auto type and matching protocol")
+	}
+}
+
+func TestResolve_RecursiveSimple(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"base-model": {
+				Provider:              "openai",
+				Model:                 "gpt-4-turbo",
+				Type:                  "openai",
+				KimiToolCallTransform: config.Bool(true),
+			},
+			"alias-model": {
+				Provider: "openai",
+				Model:    "base-model",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("alias-model")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Model != "gpt-4-turbo" {
+		t.Errorf("expected upstream model 'gpt-4-turbo', got '%s'", route.Model)
+	}
+	if route.OutputProtocol != "openai" {
+		t.Errorf("expected output protocol 'openai', got '%s'", route.OutputProtocol)
+	}
+	if !route.KimiToolCallTransform {
+		t.Error("expected KimiToolCallTransform to be inherited as true")
+	}
+}
+
+func TestResolve_RecursiveMultiLevel(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"leaf": {
+				Provider: "openai",
+				Model:    "gpt-4o",
+				Type:     "openai",
+			},
+			"mid": {
+				Provider: "openai",
+				Model:    "leaf",
+				Type:     "anthropic",
+			},
+			"top": {
+				Provider: "openai",
+				Model:    "mid",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("top")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Model != "gpt-4o" {
+		t.Errorf("expected upstream model 'gpt-4o', got '%s'", route.Model)
+	}
+	// Type should be overridden by mid
+	if route.OutputProtocol != "anthropic" {
+		t.Errorf("expected output protocol 'anthropic', got '%s'", route.OutputProtocol)
+	}
+}
+
+func TestResolve_RecursiveOverride(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+			{Name: "anthropic", Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"base": {
+				Provider:              "openai",
+				Model:                 "gpt-4",
+				Type:                  "openai",
+				KimiToolCallTransform: config.Bool(true),
+				GLM5ToolCallTransform: config.Bool(false),
+				ReasoningSplit:        config.Bool(true),
+			},
+			"override": {
+				Provider:              "anthropic",
+				Model:                 "base",
+				Type:                  "anthropic",
+				KimiToolCallTransform: config.Bool(false),
+				GLM5ToolCallTransform: config.Bool(true),
+				ReasoningSplit:        config.Bool(false),
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("override")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Provider.Name != "anthropic" {
+		t.Errorf("expected provider 'anthropic', got '%s'", route.Provider.Name)
+	}
+	if route.Model != "gpt-4" {
+		t.Errorf("expected upstream model 'gpt-4', got '%s'", route.Model)
+	}
+	if route.OutputProtocol != "anthropic" {
+		t.Errorf("expected output protocol 'anthropic', got '%s'", route.OutputProtocol)
+	}
+	if route.KimiToolCallTransform {
+		t.Error("expected KimiToolCallTransform to be overridden to false")
+	}
+	if !route.GLM5ToolCallTransform {
+		t.Error("expected GLM5ToolCallTransform to be overridden to true")
+	}
+	if route.ReasoningSplit {
+		t.Error("expected ReasoningSplit to be overridden to false")
+	}
+}
+
+func TestResolve_RecursiveCycle(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"a": {
+				Provider: "openai",
+				Model:    "b",
+			},
+			"b": {
+				Provider: "openai",
+				Model:    "a",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = r.Resolve("a")
+	if err == nil {
+		t.Fatal("expected error for cyclic model reference")
+	}
+	if !strings.Contains(err.Error(), "cycle detected") {
+		t.Errorf("expected cycle detection error, got: %v", err)
+	}
+}
+
+func TestResolve_RecursiveSelfReference(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"self": {
+				Provider: "openai",
+				Model:    "self",
+				Type:     "openai",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Self-reference is treated as a leaf, not a cycle.
+	// The upstream model ID simply matches the alias name.
+	route, err := r.Resolve("self")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Model != "self" {
+		t.Errorf("expected upstream model 'self', got '%s'", route.Model)
+	}
+	if route.OutputProtocol != "openai" {
+		t.Errorf("expected output protocol 'openai', got '%s'", route.OutputProtocol)
+	}
+}
+
+func TestResolve_RecursiveBooleanInheritanceNil(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"base": {
+				Provider:              "openai",
+				Model:                 "gpt-4",
+				KimiToolCallTransform: config.Bool(true),
+			},
+			"alias": {
+				Provider: "openai",
+				Model:    "base",
+				// KimiToolCallTransform omitted (nil) → should inherit true
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("alias")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !route.KimiToolCallTransform {
+		t.Error("expected KimiToolCallTransform to inherit true from base")
+	}
+}
+
+func TestResolve_RecursiveBooleanExplicitFalseOverride(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"base": {
+				Provider:              "openai",
+				Model:                 "gpt-4",
+				KimiToolCallTransform: config.Bool(true),
+			},
+			"alias": {
+				Provider:              "openai",
+				Model:                 "base",
+				KimiToolCallTransform: config.Bool(false),
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("alias")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.KimiToolCallTransform {
+		t.Error("expected KimiToolCallTransform to be explicitly overridden to false")
+	}
+}
+
+func TestResolve_LeafModelNotInMap(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"my-model": {
+				Provider: "openai",
+				Model:    "gpt-4-turbo",
+				Type:     "openai",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("my-model")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Model != "gpt-4-turbo" {
+		t.Errorf("expected upstream model 'gpt-4-turbo', got '%s'", route.Model)
+	}
+	// gpt-4-turbo is not in Models map, so no recursion happens
+}
+
+func TestResolve_RecursiveProviderChange(t *testing.T) {
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "p1", Endpoints: map[string]string{"openai": "https://p1.com"}},
+			{Name: "p2", Endpoints: map[string]string{"anthropic": "https://p2.com"}},
+		},
+		Models: map[string]config.ModelConfig{
+			"base": {
+				Provider: "p1",
+				Model:    "gpt-4",
+				Type:     "openai",
+			},
+			"alias": {
+				Provider: "p2",
+				Model:    "base",
+				Type:     "anthropic",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("alias")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if route.Provider.Name != "p2" {
+		t.Errorf("expected provider 'p2', got '%s'", route.Provider.Name)
+	}
+	if route.Model != "gpt-4" {
+		t.Errorf("expected upstream model 'gpt-4', got '%s'", route.Model)
+	}
+	if route.OutputProtocol != "anthropic" {
+		t.Errorf("expected output protocol 'anthropic', got '%s'", route.OutputProtocol)
 	}
 }

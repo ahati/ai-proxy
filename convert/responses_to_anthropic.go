@@ -706,7 +706,6 @@ func extractContentFromInput(content interface{}) string {
 
 // convertResponsesToolsToAnthropic converts OpenAI Responses API tools to Anthropic tools.
 
-
 func convertResponsesToolsToAnthropic(openTools []types.ResponsesTool) []types.ToolDef {
 	if len(openTools) == 0 {
 		return nil

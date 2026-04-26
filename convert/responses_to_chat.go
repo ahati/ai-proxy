@@ -760,4 +760,3 @@ func (c *ResponsesToChatConverter) convertTool(tool *types.ResponsesTool) *types
 }
 
 // ResponsesToChatTransformer converts OpenAI Responses SSE to Chat Completions format.
-

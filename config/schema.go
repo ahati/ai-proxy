@@ -122,8 +122,19 @@ func (p *Provider) GetDefaultProtocol() string {
 	return ""
 }
 
+// Bool returns a pointer to a bool value.
+// Used for pointer bool fields in ModelConfig to distinguish omitted from explicit false.
+func Bool(b bool) *bool {
+	return &b
+}
+
 // ModelConfig defines how a model alias maps to a specific provider and model.
 // This allows routing requests to the appropriate upstream provider.
+//
+// Recursive resolution: if the Model field matches another key in the Models map,
+// properties are inherited from that config and merged (alias overrides base).
+// Use Bool() helper for boolean fields to distinguish "not set" (nil, inherit)
+// from "explicitly false" (*false, override).
 type ModelConfig struct {
 	// Provider is the name of the provider to use for this model.
 	Provider string `json:"provider"`
@@ -135,15 +146,72 @@ type ModelConfig struct {
 	Type string `json:"type,omitempty"`
 	// KimiToolCallTransform enables tool call transformation for this model.
 	// When true, tool calls are transformed between OpenAI and Anthropic formats.
-	KimiToolCallTransform bool `json:"kimi_tool_call_transform"`
+	KimiToolCallTransform *bool `json:"kimi_tool_call_transform,omitempty"`
 	// GLM5ToolCallTransform enables GLM-5 style XML tool call extraction.
 	// When true, extracts tool calls from <tool_call> tags in reasoning_content.
-	GLM5ToolCallTransform bool `json:"glm5_tool_call_transform"`
+	GLM5ToolCallTransform *bool `json:"glm5_tool_call_transform,omitempty"`
 	// ReasoningSplit enables separate reasoning output for providers that support it.
 	// When true, adds "reasoning_split": true to the ChatCompletionRequest.
 	// Supported by MiniMax M2.7 to return reasoning in reasoning_details field
 	// instead of embedded aisaI tags in content.
-	ReasoningSplit bool `json:"reasoning_split,omitempty"`
+	ReasoningSplit *bool `json:"reasoning_split,omitempty"`
+	// SamplingParams defines optional sampling parameters to merge into requests.
+	// Only parameters not already set by the client are overridden when Override=false.
+	SamplingParams *SamplingParams `json:"sampling_params,omitempty"`
+}
+
+// SamplingParams defines optional sampling parameters that can be configured
+// at the model level and merged into requests.
+// This allows enforcing consistent behavior across all requests to a model,
+// or providing defaults when clients don't specify parameters.
+type SamplingParams struct {
+	// Override controls whether config values override client values.
+	// When nil or true, config values always replace client values.
+	// When false, config values only apply if client didn't set them.
+	// Default: true (config overrides client).
+	Override *bool `json:"override,omitempty"`
+
+	// Temperature controls randomness in output generation.
+	// Range: 0.0 to 2.0. Higher values produce more random output.
+	Temperature *float64 `json:"temperature,omitempty"`
+
+	// TopP controls diversity via nucleus sampling.
+	// Range: 0.0 to 1.0. Alternative to temperature.
+	TopP *float64 `json:"top_p,omitempty"`
+
+	// TopK limits sampling to the K most likely tokens.
+	// Not supported by all providers.
+	TopK *int `json:"top_k,omitempty"`
+
+	// PresencePenalty penalizes new tokens based on presence in text so far.
+	// Range: -2.0 to 2.0.
+	PresencePenalty *float64 `json:"presence_penalty,omitempty"`
+
+	// FrequencyPenalty penalizes new tokens based on frequency in text so far.
+	// Range: -2.0 to 2.0.
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+}
+
+// ShouldOverride returns whether config values should override client values.
+// Default is true when Override is nil (omitted from config).
+//
+// @return true if config values should override client values
+func (s *SamplingParams) ShouldOverride() bool {
+	if s == nil || s.Override == nil {
+		return true // Default: config overrides client
+	}
+	return *s.Override
+}
+
+// HasParams returns true if any sampling parameter is set.
+//
+// @return true if at least one parameter has a non-nil value
+func (s *SamplingParams) HasParams() bool {
+	if s == nil {
+		return false
+	}
+	return s.Temperature != nil || s.TopP != nil || s.TopK != nil ||
+		s.PresencePenalty != nil || s.FrequencyPenalty != nil
 }
 
 // FallbackConfig defines the fallback behavior when a request fails.
@@ -163,6 +231,8 @@ type FallbackConfig struct {
 	GLM5ToolCallTransform bool `json:"glm5_tool_call_transform"`
 	// ReasoningSplit enables separate reasoning output for fallback requests.
 	ReasoningSplit bool `json:"reasoning_split,omitempty"`
+	// SamplingParams defines optional sampling parameters to merge into fallback requests.
+	SamplingParams *SamplingParams `json:"sampling_params,omitempty"`
 }
 
 // SummarizerConfig defines the configuration for the reasoning summarizer.

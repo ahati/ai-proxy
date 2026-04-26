@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"ai-proxy/capture"
+	"ai-proxy/config"
 	"ai-proxy/convert"
 )
 
@@ -31,6 +32,8 @@ type RequestConfig struct {
 	WebSearchEnabled bool
 	// Store enables conversation storage (used by Responses API ZDR mode).
 	Store bool
+	// SamplingParams to inject into requests (only if not set by client when Override=false).
+	SamplingParams *config.SamplingParams
 }
 
 // RequestTransform is a one-shot request body transformation function.
@@ -59,6 +62,11 @@ func BuildRequestPipeline(cfg RequestConfig) (RequestTransform, error) {
 
 	// Start with model update (always runs)
 	steps := []RequestTransform{stepUpdateModel(cfg.ResolvedModel)}
+
+	// Inject sampling parameters if configured
+	if cfg.SamplingParams != nil && cfg.SamplingParams.HasParams() {
+		steps = append(steps, stepInjectSamplingParams(cfg.SamplingParams))
+	}
 
 	// Web search pre-processing: convert server tools to function tools
 	// before passthrough check. This is required for Messages handler because
@@ -328,6 +336,60 @@ func stepResponsesToAnthropic(store bool) RequestTransform {
 // ─────────────────────────────────────────────────────────────────────────────
 // Composition
 // ─────────────────────────────────────────────────────────────────────────────
+
+// stepInjectSamplingParams creates a transform that merges sampling parameters
+// into the request body based on the override setting.
+// When Override is true (default), config values always replace client values.
+// When Override is false, config values only apply if client didn't set them.
+//
+// @param params - sampling parameters to inject
+// @return RequestTransform that merges parameters into request body
+func stepInjectSamplingParams(params *config.SamplingParams) RequestTransform {
+	return func(_ context.Context, body []byte) ([]byte, error) {
+		if params == nil || !params.HasParams() {
+			return body, nil
+		}
+
+		var req map[string]interface{}
+		if err := json.Unmarshal(body, &req); err != nil {
+			return body, nil
+		}
+
+		override := params.ShouldOverride()
+		modified := false
+
+		// Helper to inject a parameter
+		inject := func(key string, value interface{}) {
+			_, clientSet := req[key]
+			if override || !clientSet {
+				req[key] = value
+				modified = true
+			}
+		}
+
+		// Inject each parameter
+		if params.Temperature != nil {
+			inject("temperature", *params.Temperature)
+		}
+		if params.TopP != nil {
+			inject("top_p", *params.TopP)
+		}
+		if params.TopK != nil {
+			inject("top_k", *params.TopK)
+		}
+		if params.PresencePenalty != nil {
+			inject("presence_penalty", *params.PresencePenalty)
+		}
+		if params.FrequencyPenalty != nil {
+			inject("frequency_penalty", *params.FrequencyPenalty)
+		}
+
+		if !modified {
+			return body, nil
+		}
+		return json.Marshal(req)
+	}
+}
 
 // chainSteps composes multiple RequestTransform steps into a single function.
 // Each step receives the output of the previous step. If any step fails, the

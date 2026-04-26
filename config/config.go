@@ -5,6 +5,8 @@ package config
 import (
 	"os"
 	"time"
+
+	"ai-proxy/logging"
 )
 
 // Config holds all configuration settings for the proxy server.
@@ -43,6 +45,7 @@ type Config struct {
 func Load() *Config {
 	flags, err := ParseFlags()
 	if err != nil {
+		logging.ErrorMsg("config: failed to parse CLI flags: %v", err)
 		// If config file is required but not provided, return config with error info
 		// The caller should check AppConfig == nil
 		return &Config{
@@ -57,6 +60,7 @@ func Load() *Config {
 	loader := NewLoader()
 	appConfig, err := loader.Load(flags.ConfigFile)
 	if err != nil {
+		logging.ErrorMsg("config: failed to load JSON config from '%s': %v", flags.ConfigFile, err)
 		// Return config with nil AppConfig, caller should handle error
 		return &Config{
 			Port:                  getEnvOrFlag("PORT", flags.Port, "8080"),

@@ -1,0 +1,466 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ahati/ai-proxy/refs/heads/main/config.schema.json",
+  "title": "AI Proxy Configuration",
+  "description": "Configuration schema for the multi-provider multi-protocol LLM proxy. Supports OpenAI, Anthropic, and Responses API protocols with model routing, fallback, web search, and reasoning summarization.",
+  "type": "object",
+  "required": [
+    "providers"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "providers": {
+      "type": "array",
+      "minItems": 1,
+      "description": "List of upstream API providers. Each provider defines an external LLM service with its endpoints and authentication.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "endpoints"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Unique identifier for this provider. Used as reference in model configurations."
+          },
+          "endpoints": {
+            "type": "object",
+            "minProperties": 1,
+            "description": "Maps protocol names to endpoint URLs. At least one endpoint required.",
+            "patternProperties": {
+              "^(openai|anthropic|responses)$": {
+                "type": "string",
+                "format": "uri-reference",
+                "description": "Endpoint URL for this protocol. Example: https://api.provider.com/v1/chat/completions"
+              }
+            },
+            "additionalProperties": false
+          },
+          "default": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "anthropic",
+              "responses"
+            ],
+            "description": "Default protocol for multi-protocol providers. Required when endpoints has more than one entry."
+          },
+          "apiKey": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Direct API key for authentication. Supports ${VAR_NAME} syntax for environment variable interpolation. At least one of apiKey or envApiKey is required."
+          },
+          "envApiKey": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Environment variable name containing the API key. Used when apiKey is not set directly."
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "apiKey"
+            ]
+          },
+          {
+            "required": [
+              "envApiKey"
+            ]
+          }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "endpoints": {
+                  "minProperties": 2
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "default"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "models": {
+      "type": "object",
+      "description": "Maps model aliases to their provider and model configuration. Keys are user-facing model names (aliases).",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name of the provider to use. Must reference an existing provider from the providers list."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Actual model identifier on the upstream provider. Can reference another model alias for inheritance."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "anthropic",
+              "auto"
+            ],
+            "default": "auto",
+            "description": "Output protocol: 'openai' for Chat Completions, 'anthropic' for Messages API, 'auto' for passthrough (use incoming protocol)."
+          },
+          "kimi_tool_call_transform": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable Kimi K2.5 tool call transformation between OpenAI and Anthropic formats."
+          },
+          "glm5_tool_call_transform": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable GLM-5 XML tool call extraction from reasoning_content tags."
+          },
+          "reasoning_split": {
+            "type": "boolean",
+            "default": false,
+            "description": "Enable separate reasoning output in streaming responses (MiniMax M2.7)."
+          },
+          "sampling_params": {
+            "$ref": "#/$defs/SamplingParams"
+          }
+        }
+      }
+    },
+    "fallback": {
+      "type": "object",
+      "description": "Fallback configuration for requests to unknown models. Routes failed requests to an alternative provider.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable fallback routing for unknown models."
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Fallback provider name. Must reference an existing provider. Required when enabled=true."
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "default": "{model}",
+          "description": "Fallback model identifier. Supports {model} placeholder for the requested model name. Required when enabled=true."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "anthropic",
+            "auto"
+          ],
+          "description": "Fallback output protocol."
+        },
+        "kimi_tool_call_transform": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Kimi tool call transform for fallback."
+        },
+        "glm5_tool_call_transform": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable GLM-5 tool call transform for fallback."
+        },
+        "reasoning_split": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable reasoning split for fallback."
+        },
+        "sampling_params": {
+          "$ref": "#/$defs/SamplingParams"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "provider",
+              "model"
+            ]
+          }
+        }
+      ]
+    },
+    "summarizer": {
+      "type": "object",
+      "description": "Reasoning summarization configuration. Uses a fast model to summarize the LLM's internal reasoning.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable reasoning summarization."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "http",
+            "local"
+          ],
+          "default": "http",
+          "description": "Summarizer mode: 'http' uses API calls, 'local' uses llama.cpp for offline summarization."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Provider name for HTTP mode summarization."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model for summarization (e.g., gpt-4o-mini, claude-3-haiku)."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Custom summarization prompt. Empty uses default prompt."
+        },
+        "local": {
+          "$ref": "#/$defs/LocalSummarizerConfig"
+        }
+      }
+    },
+    "responses": {
+      "type": "object",
+      "description": "Responses API specific configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Maximum conversation history token count. Older turns are truncated. 0 = no limit."
+        }
+      }
+    },
+    "websearch": {
+      "type": "object",
+      "description": "Web search service configuration for tool-enabled models.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable web search tool support."
+        },
+        "provider": {
+          "type": "string",
+          "enum": [
+            "exa",
+            "brave",
+            "ddg"
+          ],
+          "description": "Web search provider: Exa (AI search), Brave, or DuckDuckGo."
+        },
+        "exa_api_key": {
+          "type": "string",
+          "description": "Exa API key. Supports ${VAR_NAME} syntax."
+        },
+        "brave_api_key": {
+          "type": "string",
+          "description": "Brave Search API key. Supports ${VAR_NAME} syntax."
+        },
+        "max_results": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10,
+          "description": "Maximum search results to return."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 120,
+          "default": 30,
+          "description": "Search timeout in seconds."
+        }
+      }
+    },
+    "memoryLogs": {
+      "type": "object",
+      "description": "In-memory request logging configuration for the Logs UI.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable in-memory request logging. Can be toggled at runtime via UI."
+        },
+        "capacity": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 100000,
+          "default": 2000,
+          "description": "Maximum log entries to retain. Oldest discarded when limit reached."
+        }
+      }
+    },
+    "$schema": {
+      "type": "string",
+      "format": "uri-reference",
+      "description": "Reference to the JSON Schema for this configuration."
+    },
+    "$id": {
+      "type": "string",
+      "format": "uri-reference",
+      "description": "Unique identifier for this configuration instance."
+    }
+  },
+  "$defs": {
+    "SamplingParams": {
+      "type": "object",
+      "description": "Sampling parameters to inject into requests. Allows enforcing consistent behavior or providing defaults.",
+      "additionalProperties": false,
+      "properties": {
+        "override": {
+          "type": "boolean",
+          "default": true,
+          "description": "Config value behavior: true = config always overrides client values, false = client values win when set. Default is true."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature (0-2). Higher = more random. 0 = deterministic."
+        },
+        "top_p": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Nucleus sampling probability (0-1). Alternative to temperature."
+        },
+        "top_k": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Top-K sampling. Limits to K most likely tokens. Not supported by all providers."
+        },
+        "presence_penalty": {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 2,
+          "description": "Presence penalty (-2 to 2). Penalizes tokens based on presence in text so far."
+        },
+        "frequency_penalty": {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 2,
+          "description": "Frequency penalty (-2 to 2). Penalizes tokens based on frequency in text so far."
+        }
+      }
+    },
+    "LocalSummarizerConfig": {
+      "type": "object",
+      "description": "Local llama.cpp summarizer configuration for offline reasoning summarization.",
+      "additionalProperties": false,
+      "required": [
+        "model_path"
+      ],
+      "properties": {
+        "model_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path to the GGUF model file for local inference."
+        },
+        "context_size": {
+          "type": "integer",
+          "minimum": 512,
+          "default": 2048,
+          "description": "Context window size for the model."
+        },
+        "threads": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "CPU threads to use. 0 = auto-detect."
+        },
+        "gpu_layers": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Layers to offload to GPU. 0 = CPU-only."
+        },
+        "max_summary_tokens": {
+          "type": "integer",
+          "minimum": 10,
+          "default": 50,
+          "description": "Maximum tokens to generate for summary."
+        },
+        "max_reasoning_chars": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0,
+          "description": "Maximum reasoning input characters. 0 = unlimited."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "providers": [
+        {
+          "name": "openai",
+          "endpoints": {
+            "openai": "https://api.openai.com/v1/chat/completions"
+          },
+          "envApiKey": "OPENAI_API_KEY"
+        },
+        {
+          "name": "anthropic",
+          "endpoints": {
+            "anthropic": "https://api.anthropic.com/v1/messages",
+            "openai": "https://api.anthropic.com/v1/chat/completions"
+          },
+          "default": "anthropic",
+          "apiKey": "${ANTHROPIC_API_KEY}"
+        }
+      ],
+      "models": {
+        "gpt-4o": {
+          "provider": "openai",
+          "model": "gpt-4o",
+          "sampling_params": {
+            "temperature": 0.7
+          }
+        },
+        "claude-3-sonnet": {
+          "provider": "anthropic",
+          "model": "claude-3-5-sonnet-20241022",
+          "type": "anthropic",
+          "sampling_params": {
+            "override": false,
+            "temperature": 0.5,
+            "top_p": 0.95
+          }
+        }
+      },
+      "fallback": {
+        "enabled": true,
+        "provider": "openai",
+        "model": "gpt-4o-mini"
+      }
+    }
+  ]
+}
