@@ -157,8 +157,8 @@
       }
     },
     "gpt-5-mini": {
-      "provider": "minimax",
-      "model": "MiniMax-M2.7",
+      "provider": "opencode_go",
+      "model": "minimax-m2.7",
       "type": "auto",
       "kimi_tool_call_transform": false,
       "reasoning_split": true,
@@ -170,7 +170,7 @@
     },
     "MiniMax-M2.7": {
       "provider": "opencode_go",
-      "model": "MiniMax-M2.7",
+      "model": "minimax-m2.7",
       "type": "auto",
       "kimi_tool_call_transform": false,
       "reasoning_split": true,
