@@ -315,6 +315,18 @@ func (c MemoryLogsConfig) GetCapacity() int {
 	return c.Capacity
 }
 
+// MCPWebSearchConfig defines MCP endpoint settings for the web search tool.
+type MCPWebSearchConfig struct {
+	// Enabled determines whether the MCP web_search tool endpoint is active.
+	Enabled bool `json:"enabled"`
+}
+
+// MCPConfig defines configuration for MCP (Model Context Protocol) server endpoints.
+type MCPConfig struct {
+	// WebSearch defines the MCP endpoint for web search tool exposure.
+	WebSearch MCPWebSearchConfig `json:"websearch"`
+}
+
 // Schema is the root configuration structure for the multi-provider proxy.
 // It contains all provider definitions, model mappings, and fallback settings.
 type Schema struct {
@@ -337,4 +349,6 @@ type Schema struct {
 	// merged along the chain (alias overrides base). When false, only single-level
 	// resolution is performed. Default: false.
 	RecursiveModelResolution bool `json:"recursive_model_resolution,omitempty"`
+	// MCP defines the MCP server endpoint configuration.
+	MCP MCPConfig `json:"mcp"`
 }

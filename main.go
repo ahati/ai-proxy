@@ -11,6 +11,7 @@ import (
 	"ai-proxy/config"
 	"ai-proxy/conversation"
 	"ai-proxy/logging"
+	proxyMCP "ai-proxy/mcp"
 	"ai-proxy/summarizer"
 	"ai-proxy/websearch"
 )
@@ -78,6 +79,15 @@ func main() {
 	// Create server with loaded configuration
 	// Middleware is added first so it applies to all routes
 	server := api.NewServer(cfg, manager, api.NewCaptureMiddleware(storage).Handler())
+
+	// Initialize MCP server endpoint if enabled and web search is available
+	if cfg.AppConfig.MCP.WebSearch.Enabled && websearch.DefaultService != nil {
+		mcpServer := proxyMCP.NewServer(websearch.DefaultService)
+		if mcpServer != nil {
+			server.SetMCPHandler(mcpServer.Handler())
+			logging.InfoMsg("MCP endpoint enabled at /mcp")
+		}
+	}
 
 	// Build listen address from configured port
 	addr := ":" + cfg.Port

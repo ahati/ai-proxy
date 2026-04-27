@@ -283,5 +283,10 @@
     "brave_api_key": "${BRAVE_API_KEY}",
     "max_results": 10,
     "timeout": 30
+  },
+  "mcp": {
+    "websearch": {
+      "enabled": true
+    }
   }
 }

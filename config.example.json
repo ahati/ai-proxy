@@ -96,5 +96,10 @@
   "memoryLogs": {
     "enabled": true,
     "capacity": 2000
+  },
+  "mcp": {
+    "websearch": {
+      "enabled": false
+    }
   }
 }

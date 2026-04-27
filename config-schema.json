@@ -324,6 +324,25 @@
       "default": false,
       "description": "Enable recursive model chain resolution. When true, the Model field can reference another model key, with properties merged along the chain (alias overrides base). When false, only single-level resolution is performed."
     },
+    "mcp": {
+      "type": "object",
+      "description": "MCP (Model Context Protocol) server endpoint configuration.",
+      "additionalProperties": false,
+      "properties": {
+        "websearch": {
+          "type": "object",
+          "description": "MCP endpoint for the web search tool.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false,
+              "description": "Enable the MCP web_search tool endpoint."
+            }
+          }
+        }
+      }
+    },
     "$schema": {
       "type": "string",
       "format": "uri-reference",

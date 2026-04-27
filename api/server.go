@@ -36,6 +36,9 @@ type Server struct {
 	// manager holds the thread-safe configuration manager for live config updates.
 	// Replaces the previous modelRouter field with atomic config swap support.
 	manager *config.ConfigManager
+
+	// mcpHandler is the optional MCP endpoint handler for tool discovery and invocation.
+	mcpHandler http.Handler
 }
 
 // NewServer creates and initializes a new Server instance with the given configuration.
@@ -75,6 +78,13 @@ func NewServer(cfg *config.Config, manager *config.ConfigManager, middleware ...
 	s.setupRoutes()
 
 	return s
+}
+
+// SetMCPHandler sets the MCP endpoint handler and registers the /mcp route.
+// Must be called before the server starts.
+func (s *Server) SetMCPHandler(h http.Handler) {
+	s.mcpHandler = h
+	s.router.Any("/mcp", gin.WrapH(h))
 }
 
 // setupRoutes registers all API endpoints with their corresponding handlers.
@@ -164,6 +174,8 @@ func (s *Server) setupRoutes() {
 	s.router.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusMovedPermanently, "/ui/static/")
 	})
+
+	// MCP endpoint is registered dynamically via SetMCPHandler
 }
 
 // newRouterFromSnapshot creates a router.Router from the current config snapshot.

@@ -1,10 +1,10 @@
 # ==========================================
 # GLOBAL SETTINGS & DEFAULTS
 # ==========================================
-model = "qwen3.5-plus"
-model_provider = "proxy_ai"
+model = "glm-5"
+model_provider = "openai"
+openai_base_url = "http://host.docker.internal:8080/v1"
 model_catalog_json = "/home/vscode/custom_models.json"
-disabled_providers = ["opencode"]
 model_reasoning_effort = "medium"
 model_reasoning_summary="detailed"
 hide_agent_reasoning = false
@@ -48,5 +48,10 @@ unified_exec = true
 guardian_approval = true
 multi_agent = true
 
-[mcp_servers.exa]
-url = "https://mcp.exa.ai/mcp"
+[mcp_servers.WebSearch]
+url = "http://host.docker.internal:8080/mcp"
+enabled = true
+tool_timeout_sec = 30
+
+# [mcp_servers.excalidraw]
+# url = "https://mcp.excalidraw.com
