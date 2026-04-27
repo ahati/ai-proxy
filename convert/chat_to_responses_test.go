@@ -1897,3 +1897,85 @@ func TestChatToResponsesTransformer_FinishReasonStop(t *testing.T) {
 		t.Error("Result should NOT contain response.incomplete for finish_reason:stop")
 	}
 }
+
+// TestChatToResponsesTransformer_CloseWithoutDone emits completion events when
+// Close() is called without a prior [DONE] marker, simulating upstreams that
+// close the connection without sending the standard [DONE] terminator.
+func TestChatToResponsesTransformer_CloseWithoutDone(t *testing.T) {
+	var buf bytes.Buffer
+	transformer := NewChatToResponsesTransformer(&buf)
+	transformer.SetStore(false)
+
+	// Simulate receiving chunks: text + tool call + finish_reason, then close
+	// without ever receiving [DONE]
+	chunk1 := `{"id":"chatcmpl-001","object":"chat.completion.chunk","created":123,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hello"}}]}`
+	chunk2 := `{"id":"chatcmpl-001","object":"chat.completion.chunk","created":123,"model":"gpt-4","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"exec_command","arguments":"{\"cmd\":\"ls\"}"}}],"content":""}}]}`
+	chunk3 := `{"id":"chatcmpl-001","object":"chat.completion.chunk","created":123,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}`
+
+	if err := transformer.Receive(chunk1); err != nil {
+		t.Fatalf("Receive chunk1: %v", err)
+	}
+	if err := transformer.Receive(chunk2); err != nil {
+		t.Fatalf("Receive chunk2: %v", err)
+	}
+	if err := transformer.Receive(chunk3); err != nil {
+		t.Fatalf("Receive chunk3: %v", err)
+	}
+
+	// Close without calling ReceiveDone() — simulates stream end without [DONE]
+	if err := transformer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, `"type":"response.output_item.done"`) {
+		t.Error("output should contain response.output_item.done for tool call")
+	}
+	if !strings.Contains(output, `"type":"response.completed"`) {
+		t.Error("output should contain response.completed")
+	}
+	if !strings.Contains(output, `[DONE]`) {
+		t.Error("output should contain [DONE] marker")
+	}
+}
+
+// TestOpenAITransformerWithReceiver_CloseEmitsCompletion tests the full chain:
+// OpenAITransformer → ChatToResponsesTransformer, verifying that Close() on
+// the outer transformer propagates to emit completion events.
+func TestOpenAITransformerWithReceiver_CloseEmitsCompletion(t *testing.T) {
+	var buf bytes.Buffer
+	chatToResp := NewChatToResponsesTransformer(&buf)
+	chatToResp.SetStore(false)
+	openaiTransformer := toolcall.NewOpenAITransformerWithReceiver(chatToResp)
+
+	// Simulate receiving chunks via the OpenAITransformer
+	chunk1 := `data: {"id":"chatcmpl-001","object":"chat.completion.chunk","created":123,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hello"}}]}`
+	chunk2 := `data: {"id":"chatcmpl-001","object":"chat.completion.chunk","created":123,"model":"gpt-4","choices":[{"index":0,"delta":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"exec_command","arguments":"{\"cmd\":\"ls\"}"}}],"content":""}}]}`
+	finishChunk := `data: {"id":"chatcmpl-001","object":"chat.completion.chunk","created":123,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}}`
+
+	transformOne := func(raw string) {
+		ev := &sse.Event{Data: strings.TrimPrefix(raw, "data: ")}
+		if err := openaiTransformer.Transform(ev); err != nil {
+			t.Fatalf("Transform: %v", err)
+		}
+	}
+	transformOne(chunk1)
+	transformOne(chunk2)
+	transformOne(finishChunk)
+
+	// Close without sending [DONE] — simulates stream end
+	if err := openaiTransformer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, `"type":"response.output_item.done"`) {
+		t.Error("output should contain response.output_item.done for tool call")
+	}
+	if !strings.Contains(output, `"type":"response.completed"`) {
+		t.Error("output should contain response.completed")
+	}
+	if !strings.Contains(output, `[DONE]`) {
+		t.Error("output should contain [DONE] marker")
+	}
+}

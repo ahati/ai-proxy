@@ -293,3 +293,64 @@ func TestOpenAIFormatter_LargeArgs(t *testing.T) {
 		t.Error("expected non-empty args output")
 	}
 }
+
+// TestOpenAITransformer_Close_CallsReceiveDone verifies that Close() calls
+// ReceiveDone() on the receiver, ensuring completion events are emitted
+// even when the upstream stream ends without sending [DONE].
+func TestOpenAITransformer_Close_CallsReceiveDone(t *testing.T) {
+	mock := &mockOpenAIChatReceiver{}
+	transformer := NewOpenAITransformerWithReceiver(mock)
+	
+	err := transformer.Close()
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	
+	if !mock.receiveDoneCalled {
+		t.Error("Close() should call ReceiveDone() on the receiver")
+	}
+	if !mock.flushCalled {
+		t.Error("Close() should call Flush() on the receiver")
+	}
+}
+
+// mockOpenAIChatReceiver records which methods were called.
+type mockOpenAIChatReceiver struct {
+	receiveDoneCalled bool
+	flushCalled       bool
+	receiveCalled     bool
+}
+
+func (m *mockOpenAIChatReceiver) Receive(chunkJSON string) error {
+	m.receiveCalled = true
+	return nil
+}
+
+func (m *mockOpenAIChatReceiver) ReceiveDone() error {
+	m.receiveDoneCalled = true
+	return nil
+}
+
+func (m *mockOpenAIChatReceiver) Flush() error {
+	m.flushCalled = true
+	return nil
+}
+
+// TestAnthropicTransformer_Close_CallsReceiveDone verifies that Anthropic Close()
+// also calls ReceiveDone() on the receiver.
+func TestAnthropicTransformer_Close_CallsReceiveDone(t *testing.T) {
+	mock := &mockOpenAIChatReceiver{}
+	transformer := NewAnthropicTransformerWithReceiver(mock)
+	
+	err := transformer.Close()
+	if err != nil {
+		t.Fatalf("Close() returned error: %v", err)
+	}
+	
+	if !mock.receiveDoneCalled {
+		t.Error("Close() should call ReceiveDone() on the receiver")
+	}
+	if !mock.flushCalled {
+		t.Error("Close() should call Flush() on the receiver")
+	}
+}
