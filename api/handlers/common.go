@@ -583,6 +583,11 @@ func streamWithCapture(c *gin.Context, body io.Reader, h Handler, cc *capture.Ca
 		defer func() {
 			timingWriter.FlushRemaining()
 			transformer.Close()
+			// Flush final events (completion, [DONE]) to ensure they reach the client
+			// before the response writer is closed.
+			if canFlush {
+				flusher.Flush()
+			}
 		}()
 
 		// Initialize transformer and emit response.created BEFORE reading from upstream
@@ -659,6 +664,13 @@ func streamWithInitializedTransformer(c *gin.Context, body io.Reader, transforme
 			if canFlush {
 				flusher.Flush()
 			}
+		}
+		// Stream ended normally — close the transformer to emit final events
+		// (output_item.done, response.completed, [DONE], etc.) and flush them
+		// to the client before the response writer is released.
+		transformer.Close()
+		if canFlush {
+			flusher.Flush()
 		}
 		return false
 	})

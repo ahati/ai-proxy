@@ -107,6 +107,8 @@ type ResponsesTransformer struct {
 
 	// stopReason tracks the stop reason from message_delta event
 	stopReason string
+	// completed tracks if response.completed/incomplete has been emitted
+	completed bool
 }
 
 // ResponsesFormatter formats events in OpenAI Responses API format.
@@ -971,6 +973,16 @@ func (t *ResponsesTransformer) handleMessageDelta(event types.Event) error {
 }
 
 func (t *ResponsesTransformer) handleMessageStop(event types.Event) error {
+	return t.emitCompletion()
+}
+
+// emitCompletion emits the final completion events (output_item.done, response.completed).
+// It is safe to call multiple times; subsequent calls are no-ops.
+func (t *ResponsesTransformer) emitCompletion() error {
+	if t.completed {
+		return nil
+	}
+
 	// Emit message item completion if there's a message item with content.
 	// This includes text content OR tool calls (model can respond with just tool calls).
 	hasTextContent := t.textContent.Len() > 0
@@ -1021,6 +1033,7 @@ func (t *ResponsesTransformer) handleMessageStop(event types.Event) error {
 		}
 	}
 
+	t.completed = true
 	return nil
 }
 
@@ -1154,8 +1167,13 @@ func (t *ResponsesTransformer) Flush() error {
 	return nil
 }
 
-// Close flushes and releases resources.
+// Close flushes and releases resources, emitting completion events if needed.
 func (t *ResponsesTransformer) Close() error {
+	// Emit completion events (output_item.done, response.completed) if the
+	// stream ended without a proper message_stop event from the upstream.
+	if err := t.emitCompletion(); err != nil {
+		return err
+	}
 	return t.Flush()
 }
 
@@ -1328,6 +1346,11 @@ func (t *ResponsesTransformer) Receive(eventJSON string) error {
 // ReceiveDone signals the end of the stream.
 // It implements the AnthropicEventReceiver interface.
 func (t *ResponsesTransformer) ReceiveDone() error {
+	// Emit completion events (output_item.done, response.completed) if the
+	// stream ended without a proper message_stop event from the upstream.
+	if err := t.emitCompletion(); err != nil {
+		return err
+	}
 	return t.Flush()
 }
 

@@ -573,6 +573,14 @@ func (t *AnthropicTransformer) Flush() error {
 }
 
 func (t *AnthropicTransformer) Close() error {
+	// Signal the receiver that the stream is complete so it can emit
+	// final events (message_stop, [DONE], response.completed, etc.).
+	// This handles upstreams that close the connection without proper termination.
+	if t.receiver != nil {
+		if err := t.receiver.ReceiveDone(); err != nil {
+			return err
+		}
+	}
 	return t.Flush()
 }
 

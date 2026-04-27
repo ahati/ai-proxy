@@ -266,6 +266,14 @@ func (t *OpenAITransformer) Flush() error {
 }
 
 func (t *OpenAITransformer) Close() error {
+	// Signal the receiver that the stream is complete so it can emit
+	// final events (output_item.done, response.completed, etc.).
+	// This handles upstreams that close the connection without sending [DONE].
+	if t.receiver != nil {
+		if err := t.receiver.ReceiveDone(); err != nil {
+			return err
+		}
+	}
 	return t.Flush()
 }
 

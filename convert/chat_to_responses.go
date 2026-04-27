@@ -269,6 +269,7 @@ type ChatToResponsesTransformer struct {
 
 	messageStarted bool // track if message item has been emitted
 	completed      bool // track if response.completed has been emitted
+	doneWritten   bool // track if [DONE] terminator has been emitted
 	toolCalls      []map[string]interface{}
 
 	// Input items for conversation storage
@@ -1085,6 +1086,7 @@ func (t *ChatToResponsesTransformer) writeDone() error {
 		}
 	}
 
+	t.doneWritten = true
 	_, err := t.w.Write([]byte("data: [DONE]\n\n"))
 	return err
 }
@@ -1106,6 +1108,15 @@ func (t *ChatToResponsesTransformer) Close() error {
 		if err := t.handleFinish(); err != nil {
 			return err
 		}
+	}
+
+	// Write [DONE] terminator if not already written (e.g., by ReceiveDone)
+	if !t.doneWritten {
+		_, err := t.w.Write([]byte("data: [DONE]\n\n"))
+		if err != nil {
+			return err
+		}
+		t.doneWritten = true
 	}
 
 	return t.Flush()
