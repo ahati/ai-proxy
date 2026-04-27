@@ -136,7 +136,24 @@ func (c *ChatToAnthropicConverter) convertOpenAIMessage(openMsg types.Message) [
 	anthMsg := types.MessageInput{Role: openMsg.Role}
 
 	if len(openMsg.ToolCalls) > 0 {
-		return []types.MessageInput{c.convertAssistantWithToolCalls(openMsg)}
+		msg := c.convertAssistantWithToolCalls(openMsg)
+		c.applyReasoningToAnthropicMessage(&msg, openMsg)
+		return []types.MessageInput{msg}
+	}
+
+	// Check for reasoning content first — if present, we need content arrays
+	// to accommodate both thinking and text blocks.
+	if openMsg.Role == "assistant" && openMsg.ReasoningContent != nil && *openMsg.ReasoningContent != "" {
+		switch content := openMsg.Content.(type) {
+		case string:
+			anthMsg.Content = content
+		case []interface{}:
+			anthMsg.Content = content
+		default:
+			anthMsg.Content = ""
+		}
+		c.applyReasoningToAnthropicMessage(&anthMsg, openMsg)
+		return []types.MessageInput{anthMsg}
 	}
 
 	switch content := openMsg.Content.(type) {
@@ -247,6 +264,15 @@ func (c *ChatToAnthropicConverter) convertAssistantContentBlocks(parts []interfa
 	return []types.MessageInput{{Role: "assistant", Content: text}}
 }
 
+// applyReasoningToAnthropicMessage prepends a thinking block to an assistant
+// message when the OpenAI message has ReasoningContent.
+func (c *ChatToAnthropicConverter) applyReasoningToAnthropicMessage(anthMsg *types.MessageInput, openMsg types.Message) {
+	if openMsg.Role != "assistant" || openMsg.ReasoningContent == nil || *openMsg.ReasoningContent == "" {
+		return
+	}
+	prependReasoningToAnthropicMessage(anthMsg, *openMsg.ReasoningContent)
+}
+
 func (c *ChatToAnthropicConverter) normalizeAnthropicMessages(messages []types.MessageInput) []types.MessageInput {
 	if len(messages) == 0 {
 		return messages
@@ -270,6 +296,36 @@ func (c *ChatToAnthropicConverter) normalizeAnthropicMessages(messages []types.M
 	}
 
 	return normalized
+}
+
+// prependReasoningToAnthropicMessage prepends a thinking block to an Anthropic
+// assistant message when an OpenAI Message carries ReasoningContent. This preserves
+// reasoning traces across format boundaries in multi-turn thinking-mode conversations.
+func prependReasoningToAnthropicMessage(anthMsg *types.MessageInput, reasoning string) {
+	if reasoning == "" {
+		return
+	}
+
+	thinkingBlock := map[string]interface{}{
+		"type":     "thinking",
+		"thinking": reasoning,
+	}
+
+	switch content := anthMsg.Content.(type) {
+	case string:
+		if content != "" {
+			anthMsg.Content = []interface{}{thinkingBlock, map[string]interface{}{
+				"type": "text",
+				"text": content,
+			}}
+		} else {
+			anthMsg.Content = []interface{}{thinkingBlock}
+		}
+	case []interface{}:
+		anthMsg.Content = append([]interface{}{thinkingBlock}, content...)
+	default:
+		anthMsg.Content = []interface{}{thinkingBlock}
+	}
 }
 
 func emptyAnthropicMessage(role string) types.MessageInput {

@@ -97,7 +97,7 @@ type ResponsesToolFunction struct {
 // InputItem represents an input item in the conversation.
 type InputItem struct {
 	// Type identifies the input item type.
-	// Values: "message", "function_call", "function_call_output"
+	// Values: "message", "function_call", "function_call_output", "reasoning"
 	Type string `json:"type"`
 	// Role identifies the speaker for message type.
 	// Values: "user", "assistant", "system", "developer"
@@ -117,6 +117,8 @@ type InputItem struct {
 	Arguments string `json:"arguments,omitempty"`
 	// Output is the function result for function_call_output type.
 	Output string `json:"output,omitempty"`
+	// Summary contains reasoning summary for reasoning type.
+	Summary interface{} `json:"summary,omitempty"`
 }
 
 // ContentPart represents a content part in a message.

@@ -239,6 +239,245 @@ func TestChatToAnthropicConverter_Convert(t *testing.T) {
 	}
 }
 
+func TestChatToAnthropicConverter_ReasoningContent(t *testing.T) {
+	converter := NewChatToAnthropicConverter()
+
+	t.Run("reasoning with string content", func(t *testing.T) {
+		reasoning := "Let me think about this step by step."
+		req := types.ChatCompletionRequest{
+			Model: "claude-3-opus",
+			Messages: []types.Message{
+				{Role: "user", Content: "Hello"},
+				{Role: "assistant", Content: "Hi there!", ReasoningContent: &reasoning},
+			},
+			MaxTokens: 1024,
+		}
+
+		body, _ := json.Marshal(req)
+		result, err := converter.Convert(body)
+		if err != nil {
+			t.Fatalf("Convert failed: %v", err)
+		}
+
+		var anthReq types.MessageRequest
+		if err := json.Unmarshal(result, &anthReq); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		// Should have 2 messages (user + assistant)
+		if len(anthReq.Messages) != 2 {
+			t.Fatalf("expected 2 messages, got %d", len(anthReq.Messages))
+		}
+
+		assistantMsg := anthReq.Messages[1]
+		if assistantMsg.Role != "assistant" {
+			t.Errorf("expected assistant role, got %s", assistantMsg.Role)
+		}
+
+		blocks, ok := assistantMsg.Content.([]interface{})
+		if !ok {
+			t.Fatalf("expected content to be []interface{}, got %T", assistantMsg.Content)
+		}
+
+		if len(blocks) != 2 {
+			t.Fatalf("expected 2 content blocks (thinking + text), got %d: %+v", len(blocks), blocks)
+		}
+
+		// First block should be thinking
+		block0, ok := blocks[0].(map[string]interface{})
+		if !ok {
+			t.Fatalf("block 0: expected map, got %T", blocks[0])
+		}
+		if block0["type"] != "thinking" {
+			t.Errorf("block 0: expected type thinking, got %v", block0["type"])
+		}
+		if block0["thinking"] != reasoning {
+			t.Errorf("block 0: expected thinking %q, got %v", reasoning, block0["thinking"])
+		}
+
+		// Second block should be text
+		block1, ok := blocks[1].(map[string]interface{})
+		if !ok {
+			t.Fatalf("block 1: expected map, got %T", blocks[1])
+		}
+		if block1["type"] != "text" {
+			t.Errorf("block 1: expected type text, got %v", block1["type"])
+		}
+		if block1["text"] != "Hi there!" {
+			t.Errorf("block 1: expected text %q, got %v", "Hi there!", block1["text"])
+		}
+	})
+
+	t.Run("reasoning with tool calls", func(t *testing.T) {
+		reasoning := "I need to call a tool."
+		req := types.ChatCompletionRequest{
+			Model: "claude-3-opus",
+			Messages: []types.Message{
+				{Role: "user", Content: "What time is it?"},
+				{Role: "assistant", Content: "Let me check.", ToolCalls: []types.ToolCall{
+					{ID: "call_1", Type: "function", Function: types.Function{
+						Name: "get_time", Arguments: `{}`,
+					}},
+				}, ReasoningContent: &reasoning},
+			},
+			MaxTokens: 1024,
+		}
+
+		body, _ := json.Marshal(req)
+		result, err := converter.Convert(body)
+		if err != nil {
+			t.Fatalf("Convert failed: %v", err)
+		}
+
+		var anthReq types.MessageRequest
+		if err := json.Unmarshal(result, &anthReq); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		assistantMsg := anthReq.Messages[1]
+		blocks, ok := assistantMsg.Content.([]interface{})
+		if !ok {
+			t.Fatalf("expected content to be []interface{}, got %T", assistantMsg.Content)
+		}
+
+		// Should have: thinking, text, tool_use
+		if len(blocks) != 3 {
+			t.Fatalf("expected 3 content blocks, got %d", len(blocks))
+		}
+
+		block0, _ := blocks[0].(map[string]interface{})
+		if block0["type"] != "thinking" {
+			t.Errorf("block 0: expected thinking, got %v", block0["type"])
+		}
+	})
+
+	t.Run("nil reasoning content omitted", func(t *testing.T) {
+		req := types.ChatCompletionRequest{
+			Model: "claude-3-opus",
+			Messages: []types.Message{
+				{Role: "user", Content: "Hello"},
+				{Role: "assistant", Content: "Hi!", ReasoningContent: nil},
+			},
+			MaxTokens: 1024,
+		}
+
+		body, _ := json.Marshal(req)
+		result, err := converter.Convert(body)
+		if err != nil {
+			t.Fatalf("Convert failed: %v", err)
+		}
+
+		var anthReq types.MessageRequest
+		if err := json.Unmarshal(result, &anthReq); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		assistantMsg := anthReq.Messages[1]
+		// Should still be a simple string (no thinking block)
+		if str, ok := assistantMsg.Content.(string); !ok || str != "Hi!" {
+			t.Errorf("expected content to be string 'Hi!', got %T: %v", assistantMsg.Content, assistantMsg.Content)
+		}
+	})
+
+	t.Run("empty reasoning content omitted", func(t *testing.T) {
+		empty := ""
+		req := types.ChatCompletionRequest{
+			Model: "claude-3-opus",
+			Messages: []types.Message{
+				{Role: "user", Content: "Hello"},
+				{Role: "assistant", Content: "Hi!", ReasoningContent: &empty},
+			},
+			MaxTokens: 1024,
+		}
+
+		body, _ := json.Marshal(req)
+		result, err := converter.Convert(body)
+		if err != nil {
+			t.Fatalf("Convert failed: %v", err)
+		}
+
+		var anthReq types.MessageRequest
+		if err := json.Unmarshal(result, &anthReq); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		assistantMsg := anthReq.Messages[1]
+		// Should still be a string (no thinking block for empty reasoning)
+		if str, ok := assistantMsg.Content.(string); !ok || str != "Hi!" {
+			t.Errorf("expected content to be string 'Hi!', got %T: %v", assistantMsg.Content, assistantMsg.Content)
+		}
+	})
+
+	t.Run("reasoning-only with empty content", func(t *testing.T) {
+		reasoning := "Pure reasoning."
+		req := types.ChatCompletionRequest{
+			Model: "claude-3-opus",
+			Messages: []types.Message{
+				{Role: "user", Content: "Hello"},
+				{Role: "assistant", Content: "", ReasoningContent: &reasoning},
+			},
+			MaxTokens: 1024,
+		}
+
+		body, _ := json.Marshal(req)
+		result, err := converter.Convert(body)
+		if err != nil {
+			t.Fatalf("Convert failed: %v", err)
+		}
+
+		var anthReq types.MessageRequest
+		if err := json.Unmarshal(result, &anthReq); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		assistantMsg := anthReq.Messages[1]
+		blocks, ok := assistantMsg.Content.([]interface{})
+		if !ok {
+			t.Fatalf("expected content to be []interface{}, got %T", assistantMsg.Content)
+		}
+
+		if len(blocks) != 1 {
+			t.Fatalf("expected 1 content block (thinking only), got %d", len(blocks))
+		}
+
+		block0, _ := blocks[0].(map[string]interface{})
+		if block0["type"] != "thinking" {
+			t.Errorf("expected type thinking, got %v", block0["type"])
+		}
+		if block0["thinking"] != reasoning {
+			t.Errorf("expected thinking %q, got %v", reasoning, block0["thinking"])
+		}
+	})
+
+	t.Run("non-assistant reasoning ignored", func(t *testing.T) {
+		reasoning := "System reasoning."
+		req := types.ChatCompletionRequest{
+			Model: "claude-3-opus",
+			Messages: []types.Message{
+				{Role: "user", Content: "Hello", ReasoningContent: &reasoning},
+			},
+			MaxTokens: 1024,
+		}
+
+		body, _ := json.Marshal(req)
+		result, err := converter.Convert(body)
+		if err != nil {
+			t.Fatalf("Convert failed: %v", err)
+		}
+
+		var anthReq types.MessageRequest
+		if err := json.Unmarshal(result, &anthReq); err != nil {
+			t.Fatalf("failed to parse result: %v", err)
+		}
+
+		// User message should still be a string (no thinking block)
+		userMsg := anthReq.Messages[0]
+		if str, ok := userMsg.Content.(string); !ok || str != "Hello" {
+			t.Errorf("expected user content to be string 'Hello', got %T: %v", userMsg.Content, userMsg.Content)
+		}
+	})
+}
+
 // TestChatToAnthropicTransformer_Transform tests the SSE response transformation.
 func TestChatToAnthropicTransformer_Transform(t *testing.T) {
 	tests := []struct {

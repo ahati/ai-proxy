@@ -470,3 +470,204 @@ func TestAnthropicToResponsesRequest_TemperatureAndTopP(t *testing.T) {
 		t.Errorf("expected top_p 0.9, got %f", out.TopP)
 	}
 }
+
+func TestAnthropicToResponsesRequest_ThinkingBlocks(t *testing.T) {
+	t.Run("single thinking block", func(t *testing.T) {
+		req := &types.MessageRequest{
+			Model:     "claude-3-opus",
+			MaxTokens: 1024,
+			Messages: []types.MessageInput{
+				{Role: "assistant", Content: []interface{}{
+					map[string]interface{}{
+						"type":     "thinking",
+						"thinking": "Let me analyze this carefully.",
+					},
+				}},
+			},
+		}
+
+		out, err := AnthropicToResponsesRequest(req)
+		if err != nil {
+			t.Fatalf("AnthropicToResponsesRequest failed: %v", err)
+		}
+
+		items, ok := out.Input.([]types.InputItem)
+		if !ok {
+			t.Fatalf("expected input to be []InputItem, got %T", out.Input)
+		}
+
+		if len(items) != 1 {
+			t.Fatalf("expected 1 item, got %d: %+v", len(items), items)
+		}
+
+		if items[0].Type != "reasoning" {
+			t.Errorf("expected type reasoning, got %s", items[0].Type)
+		}
+
+		// Summary is []map[string]string in Go; marshal/unmarshal to normalize
+		summaryJSON, _ := json.Marshal(items[0].Summary)
+		var summary []map[string]interface{}
+		if err := json.Unmarshal(summaryJSON, &summary); err != nil {
+			t.Fatalf("failed to unmarshal summary: %v", err)
+		}
+		if len(summary) != 1 {
+			t.Fatalf("expected 1 summary part, got %d", len(summary))
+		}
+		part := summary[0]
+		if part["type"] != "summary_text" {
+			t.Errorf("expected summary_text type, got %v", part["type"])
+		}
+		if part["text"] != "Let me analyze this carefully." {
+			t.Errorf("expected text 'Let me analyze this carefully.', got %v", part["text"])
+		}
+	})
+
+	t.Run("thinking interleaved with text and tool_use", func(t *testing.T) {
+		req := &types.MessageRequest{
+			Model:     "claude-3-opus",
+			MaxTokens: 1024,
+			Messages: []types.MessageInput{
+				{Role: "assistant", Content: []interface{}{
+					map[string]interface{}{
+						"type":     "thinking",
+						"thinking": "Initial analysis.",
+					},
+					map[string]interface{}{
+						"type": "text",
+						"text": "Let me check.",
+					},
+					map[string]interface{}{
+						"type":  "tool_use",
+						"id":    "tool_1",
+						"name":  "search",
+						"input": map[string]interface{}{"q": "weather"},
+					},
+					map[string]interface{}{
+						"type":     "thinking",
+						"thinking": "The search returned results.",
+					},
+					map[string]interface{}{
+						"type": "text",
+						"text": "It will rain.",
+					},
+				}},
+			},
+		}
+
+		out, err := AnthropicToResponsesRequest(req)
+		if err != nil {
+			t.Fatalf("AnthropicToResponsesRequest failed: %v", err)
+		}
+
+		items, ok := out.Input.([]types.InputItem)
+		if !ok {
+			t.Fatalf("expected input to be []InputItem, got %T", out.Input)
+		}
+
+		if len(items) != 5 {
+			t.Fatalf("expected 5 items, got %d: %+v", len(items), items)
+		}
+
+		// Item 0: reasoning "Initial analysis."
+		if items[0].Type != "reasoning" {
+			t.Errorf("item 0: expected reasoning, got %s", items[0].Type)
+		}
+
+		// Item 1: message with text "Let me check."
+		if items[1].Type != "message" {
+			t.Errorf("item 1: expected message, got %s", items[1].Type)
+		}
+
+		// Item 2: function_call "search"
+		if items[2].Type != "function_call" {
+			t.Errorf("item 2: expected function_call, got %s", items[2].Type)
+		}
+
+		// Item 3: reasoning "The search returned results."
+		if items[3].Type != "reasoning" {
+			t.Errorf("item 3: expected reasoning, got %s", items[3].Type)
+		}
+
+		// Item 4: message with text "It will rain."
+		if items[4].Type != "message" {
+			t.Errorf("item 4: expected message, got %s", items[4].Type)
+		}
+	})
+
+	t.Run("empty thinking text not emitted", func(t *testing.T) {
+		req := &types.MessageRequest{
+			Model:     "claude-3-opus",
+			MaxTokens: 1024,
+			Messages: []types.MessageInput{
+				{Role: "assistant", Content: []interface{}{
+					map[string]interface{}{
+						"type":     "thinking",
+						"thinking": "",
+					},
+					map[string]interface{}{
+						"type": "text",
+						"text": "Hello",
+					},
+				}},
+			},
+		}
+
+		out, err := AnthropicToResponsesRequest(req)
+		if err != nil {
+			t.Fatalf("AnthropicToResponsesRequest failed: %v", err)
+		}
+
+		items, ok := out.Input.([]types.InputItem)
+		if !ok {
+			t.Fatalf("expected input to be []InputItem, got %T", out.Input)
+		}
+
+		if len(items) != 1 {
+			t.Fatalf("expected 1 item (no reasoning), got %d: %+v", len(items), items)
+		}
+
+		if items[0].Type != "message" {
+			t.Errorf("expected message, got %s", items[0].Type)
+		}
+	})
+
+	t.Run("only thinking blocks without text or tools", func(t *testing.T) {
+		req := &types.MessageRequest{
+			Model:     "claude-3-opus",
+			MaxTokens: 1024,
+			Messages: []types.MessageInput{
+				{Role: "assistant", Content: []interface{}{
+					map[string]interface{}{
+						"type":     "thinking",
+						"thinking": "First thought.",
+					},
+					map[string]interface{}{
+						"type":     "thinking",
+						"thinking": "Second thought.",
+					},
+				}},
+			},
+		}
+
+		out, err := AnthropicToResponsesRequest(req)
+		if err != nil {
+			t.Fatalf("AnthropicToResponsesRequest failed: %v", err)
+		}
+
+		items, ok := out.Input.([]types.InputItem)
+		if !ok {
+			t.Fatalf("expected input to be []InputItem, got %T", out.Input)
+		}
+
+		if len(items) != 2 {
+			t.Fatalf("expected 2 items, got %d: %+v", len(items), items)
+		}
+
+		if items[0].Type != "reasoning" {
+			t.Errorf("item 0: expected reasoning, got %s", items[0].Type)
+		}
+		if items[1].Type != "reasoning" {
+			t.Errorf("item 1: expected reasoning, got %s", items[1].Type)
+		}
+	})
+}

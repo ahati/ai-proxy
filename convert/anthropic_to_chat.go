@@ -83,7 +83,7 @@ func convertAnthropicMessageToOpenAI(anthMsg types.MessageInput) types.Message {
 	case string:
 		openMsg.Content = content
 	case []interface{}:
-		openMsg.Content, openMsg.ToolCalls, openMsg.ToolCallID = convertAnthropicContentBlocksToOpenAI(content)
+		openMsg.Content, openMsg.ToolCalls, openMsg.ToolCallID, openMsg.ReasoningContent = convertAnthropicContentBlocksToOpenAI(content)
 		// Only pure tool_result turns can be represented as OpenAI tool messages.
 		if openMsg.ToolCallID != "" && isPureAnthropicToolResultTurn(content) {
 			openMsg.Role = "tool"
@@ -114,12 +114,15 @@ func isPureAnthropicToolResultTurn(blocks []interface{}) bool {
 	return true
 }
 
-// convertAnthropicContentBlocksToOpenAI extracts text content, tool calls, and
-// tool result IDs from Anthropic content blocks.
-func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (interface{}, []types.ToolCall, string) {
+// convertAnthropicContentBlocksToOpenAI extracts text content, tool calls,
+// tool result IDs, and reasoning content from Anthropic content blocks.
+// Returns reasoning content as *string (nil if no thinking blocks, pointer
+// to concatenated text otherwise).
+func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (interface{}, []types.ToolCall, string, *string) {
 	var textContent string
 	var toolCalls []types.ToolCall
 	var toolCallID string
+	var thinkingText string
 
 	for _, item := range blocks {
 		m, ok := item.(map[string]interface{})
@@ -134,6 +137,13 @@ func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (interface{}, [
 					textContent += "\n"
 				}
 				textContent += text
+			}
+		case "thinking":
+			if text, ok := m["thinking"].(string); ok && text != "" {
+				if thinkingText != "" {
+					thinkingText += "\n"
+				}
+				thinkingText += text
 			}
 		case "tool_use":
 			if id, ok := m["id"].(string); ok {
@@ -178,7 +188,11 @@ func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (interface{}, [
 		}
 	}
 
-	return textContent, toolCalls, toolCallID
+	var reasoning *string
+	if thinkingText != "" {
+		reasoning = &thinkingText
+	}
+	return textContent, toolCalls, toolCallID, reasoning
 }
 
 // ConvertAnthropicToolsToOpenAI transforms Anthropic tool definitions to OpenAI

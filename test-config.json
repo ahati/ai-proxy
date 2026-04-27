@@ -30,7 +30,7 @@
     {
       "name": "z.ai",
       "endpoints": {
-        "anthropic": "https://api.z.ai/api/anthropic",
+        "anthropic": "https://api.z.ai/api/anthropic/v1/messages",
         "openai": "https://api.z.ai/api/coding/paas/v4/chat/completions"
       },
       "default": "openai",
@@ -76,7 +76,7 @@
     "glm-5.1": {
       "provider": "z.ai",
       "model": "glm-5.1",
-      "type": "openai",
+      "type": "auto",
       "sampling_params": {
         "temperature": 0.7,
         "top_p": 0.95
@@ -85,7 +85,7 @@
     "glm-5-turbo": {
       "provider": "z.ai",
       "model": "glm-5-turbo",
-      "type": "openai",
+      "type": "auto",
       "sampling_params": {
         "temperature": 0.7,
         "top_p": 0.95

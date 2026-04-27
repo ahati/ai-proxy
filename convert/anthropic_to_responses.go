@@ -17,7 +17,7 @@ import (
 // Dropped fields (no Responses API equivalent):
 //   - top_k: No equivalent in Responses API
 //   - stop_sequences: No stop field in Responses API
-//   - thinking blocks in messages: No equivalent in Responses API input
+//   - thinking blocks are converted to reasoning items in-place
 func TransformAnthropicToResponses(body []byte) ([]byte, error) {
 	var req types.MessageRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -240,6 +240,19 @@ func anthropicAssistantBlocksToResponsesItems(blocks []interface{}) ([]types.Inp
 	var items []types.InputItem
 	var messageContent []types.ContentPart
 
+	// flushMessage emits any accumulated text content as a message item.
+	// Called before non-text blocks to preserve in-place ordering.
+	flushMessage := func() {
+		if len(messageContent) > 0 {
+			items = append(items, types.InputItem{
+				Type:    "message",
+				Role:    "assistant",
+				Content: messageContent,
+			})
+			messageContent = nil
+		}
+	}
+
 	for _, block := range blocks {
 		b, ok := block.(map[string]interface{})
 		if !ok {
@@ -255,8 +268,18 @@ func anthropicAssistantBlocksToResponsesItems(blocks []interface{}) ([]types.Inp
 				Text: text,
 			})
 		case "thinking":
-			// Drop thinking blocks - no equivalent in Responses API input
+			flushMessage()
+			thinkingText, _ := b["thinking"].(string)
+			if thinkingText != "" {
+				items = append(items, types.InputItem{
+					Type: "reasoning",
+					Summary: []map[string]string{
+						{"type": "summary_text", "text": thinkingText},
+					},
+				})
+			}
 		case "tool_use":
+			flushMessage()
 			id, _ := b["id"].(string)
 			name, _ := b["name"].(string)
 			inputBytes, _ := json.Marshal(b["input"])
@@ -270,15 +293,7 @@ func anthropicAssistantBlocksToResponsesItems(blocks []interface{}) ([]types.Inp
 		}
 	}
 
-	// Add message item first if there's text content
-	if len(messageContent) > 0 {
-		items = append([]types.InputItem{{
-			Type:    "message",
-			Role:    "assistant",
-			Content: messageContent,
-		}}, items...)
-	}
-
+	flushMessage()
 	return items, nil
 }
 
