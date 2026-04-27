@@ -65,6 +65,9 @@ func (l *Loader) resolveEnvVars(s *Schema) {
 		// If apiKey is empty and envApiKey is set, get from env
 		if p.APIKey == "" && p.EnvAPIKey != "" {
 			p.APIKey = os.Getenv(p.EnvAPIKey)
+			if p.APIKey == "" {
+				logging.InfoMsg("Warning: config loader: environment variable %q (envApiKey) is not set or empty, provider=%q", p.EnvAPIKey, p.Name)
+			}
 		}
 	}
 

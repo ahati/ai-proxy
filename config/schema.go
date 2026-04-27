@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"ai-proxy/logging"
 	"ai-proxy/types"
 )
 
@@ -42,24 +43,29 @@ type Provider struct {
 // @return string - the resolved API key, or empty string if not configured
 func (p *Provider) GetAPIKey() string {
 	if p.APIKey != "" {
-		// Expand ${VAR} syntax if present, otherwise return as-is
-		return expandEnvVars(p.APIKey)
+		return ExpandEnvVars(p.APIKey)
 	}
-	return os.Getenv(p.EnvAPIKey)
+	if p.EnvAPIKey != "" {
+		value := os.Getenv(p.EnvAPIKey)
+		if value == "" {
+			logging.InfoMsg("Warning: environment variable %q (envApiKey) is not set or empty, provider=%q", p.EnvAPIKey, p.Name)
+		}
+		return value
+	}
+	return ""
 }
 
-// expandEnvVars expands ${VAR_NAME} patterns in a string with the
-// corresponding environment variable values. If the environment
-// variable is not set, the pattern is left unchanged.
+// ExpandEnvVars expands ${VAR_NAME} and $VAR_NAME patterns in a string with the
+// corresponding environment variable values. Logs a warning for each variable
+// that is not set or empty.
 //
 // @param s - the string to expand
 // @return the expanded string
-func expandEnvVars(s string) string {
+func ExpandEnvVars(s string) string {
 	if s == "" {
 		return s
 	}
 	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
-		// Extract variable name from ${VAR} or $VAR format
 		varName := ""
 		if strings.HasPrefix(match, "${") && strings.HasSuffix(match, "}") {
 			varName = match[2 : len(match)-1]
@@ -72,7 +78,7 @@ func expandEnvVars(s string) string {
 		if value := os.Getenv(varName); value != "" {
 			return value
 		}
-		// If env var not set, return empty string (or could return original match)
+		logging.InfoMsg("Warning: environment variable %q is not set or empty", varName)
 		return ""
 	})
 }

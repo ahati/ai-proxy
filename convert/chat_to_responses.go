@@ -269,7 +269,7 @@ type ChatToResponsesTransformer struct {
 
 	messageStarted bool // track if message item has been emitted
 	completed      bool // track if response.completed has been emitted
-	doneWritten   bool // track if [DONE] terminator has been emitted
+	doneWritten    bool // track if [DONE] terminator has been emitted
 	toolCalls      []map[string]interface{}
 
 	// Input items for conversation storage

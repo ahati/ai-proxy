@@ -300,12 +300,12 @@ func TestOpenAIFormatter_LargeArgs(t *testing.T) {
 func TestOpenAITransformer_Close_CallsReceiveDone(t *testing.T) {
 	mock := &mockOpenAIChatReceiver{}
 	transformer := NewOpenAITransformerWithReceiver(mock)
-	
+
 	err := transformer.Close()
 	if err != nil {
 		t.Fatalf("Close() returned error: %v", err)
 	}
-	
+
 	if !mock.receiveDoneCalled {
 		t.Error("Close() should call ReceiveDone() on the receiver")
 	}
@@ -341,12 +341,12 @@ func (m *mockOpenAIChatReceiver) Flush() error {
 func TestAnthropicTransformer_Close_CallsReceiveDone(t *testing.T) {
 	mock := &mockOpenAIChatReceiver{}
 	transformer := NewAnthropicTransformerWithReceiver(mock)
-	
+
 	err := transformer.Close()
 	if err != nil {
 		t.Fatalf("Close() returned error: %v", err)
 	}
-	
+
 	if !mock.receiveDoneCalled {
 		t.Error("Close() should call ReceiveDone() on the receiver")
 	}
