@@ -695,10 +695,12 @@ func TestResolveWithProtocol_FallbackWithAutoType(t *testing.T) {
 }
 
 func TestResolve_RecursiveSimple(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"base-model": {
 				Provider:              "openai",
@@ -734,10 +736,12 @@ func TestResolve_RecursiveSimple(t *testing.T) {
 }
 
 func TestResolve_RecursiveMultiLevel(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"leaf": {
 				Provider: "openai",
@@ -775,11 +779,13 @@ func TestResolve_RecursiveMultiLevel(t *testing.T) {
 }
 
 func TestResolve_RecursiveOverride(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
 			{Name: "anthropic", Endpoints: map[string]string{"anthropic": "https://api.anthropic.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"base": {
 				Provider:              "openai",
@@ -830,10 +836,12 @@ func TestResolve_RecursiveOverride(t *testing.T) {
 }
 
 func TestResolve_RecursiveCycle(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"a": {
 				Provider: "openai",
@@ -861,10 +869,12 @@ func TestResolve_RecursiveCycle(t *testing.T) {
 }
 
 func TestResolve_RecursiveSelfReference(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"self": {
 				Provider: "openai",
@@ -894,10 +904,12 @@ func TestResolve_RecursiveSelfReference(t *testing.T) {
 }
 
 func TestResolve_RecursiveBooleanInheritanceNil(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"base": {
 				Provider:              "openai",
@@ -927,10 +939,12 @@ func TestResolve_RecursiveBooleanInheritanceNil(t *testing.T) {
 }
 
 func TestResolve_RecursiveBooleanExplicitFalseOverride(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"base": {
 				Provider:              "openai",
@@ -989,11 +1003,13 @@ func TestResolve_LeafModelNotInMap(t *testing.T) {
 }
 
 func TestResolve_RecursiveProviderChange(t *testing.T) {
+	// Test with RecursiveModelResolution enabled (feature flag on)
 	schema := &config.Schema{
 		Providers: []config.Provider{
 			{Name: "p1", Endpoints: map[string]string{"openai": "https://p1.com"}},
 			{Name: "p2", Endpoints: map[string]string{"anthropic": "https://p2.com"}},
 		},
+		RecursiveModelResolution: true,
 		Models: map[string]config.ModelConfig{
 			"base": {
 				Provider: "p1",
@@ -1023,6 +1039,131 @@ func TestResolve_RecursiveProviderChange(t *testing.T) {
 	if route.Model != "gpt-4" {
 		t.Errorf("expected upstream model 'gpt-4', got '%s'", route.Model)
 	}
+	if route.OutputProtocol != "anthropic" {
+		t.Errorf("expected output protocol 'anthropic', got '%s'", route.OutputProtocol)
+	}
+}
+
+func TestResolve_RecursiveDisabled_SingleLevel(t *testing.T) {
+	// Test with RecursiveModelResolution disabled (default behavior)
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		// RecursiveModelResolution defaults to false
+		Models: map[string]config.ModelConfig{
+			"base-model": {
+				Provider:              "openai",
+				Model:                 "gpt-4-turbo",
+				Type:                  "openai",
+				KimiToolCallTransform: config.Bool(true),
+			},
+			"alias-model": {
+				Provider: "openai",
+				Model:    "base-model",
+				Type:     "anthropic",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("alias-model")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// When recursive resolution is disabled, Model field is used as-is
+	if route.Model != "base-model" {
+		t.Errorf("expected upstream model 'base-model', got '%s'", route.Model)
+	}
+	// Type should be from alias-model (not inherited from base-model)
+	if route.OutputProtocol != "anthropic" {
+		t.Errorf("expected output protocol 'anthropic', got '%s'", route.OutputProtocol)
+	}
+	// KimiToolCallTransform should be false (not inherited)
+	if route.KimiToolCallTransform {
+		t.Error("expected KimiToolCallTransform to be false (not inherited when recursive disabled)")
+	}
+}
+
+func TestResolve_RecursiveDisabled_ExplicitFalse(t *testing.T) {
+	// Test with RecursiveModelResolution explicitly set to false
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		RecursiveModelResolution: false, // Explicitly disabled
+		Models: map[string]config.ModelConfig{
+			"leaf": {
+				Provider: "openai",
+				Model:    "gpt-4o",
+				Type:     "openai",
+			},
+			"alias": {
+				Provider: "openai",
+				Model:    "leaf",
+				Type:     "anthropic",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("alias")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// When recursive resolution is disabled, Model field is used as-is
+	if route.Model != "leaf" {
+		t.Errorf("expected upstream model 'leaf', got '%s'", route.Model)
+	}
+	// Type should be from alias (not leaf)
+	if route.OutputProtocol != "anthropic" {
+		t.Errorf("expected output protocol 'anthropic', got '%s'", route.OutputProtocol)
+	}
+}
+
+func TestResolve_RecursiveEnabled_FollowsChain(t *testing.T) {
+	// Test with RecursiveModelResolution enabled to confirm it still works
+	schema := &config.Schema{
+		Providers: []config.Provider{
+			{Name: "openai", Endpoints: map[string]string{"openai": "https://api.openai.com"}},
+		},
+		RecursiveModelResolution: true,
+		Models: map[string]config.ModelConfig{
+			"leaf": {
+				Provider: "openai",
+				Model:    "gpt-4o",
+				Type:     "openai",
+			},
+			"alias": {
+				Provider: "openai",
+				Model:    "leaf",
+				Type:     "anthropic",
+			},
+		},
+	}
+
+	r, err := NewRouter(schema)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	route, err := r.Resolve("alias")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// When recursive resolution is enabled, chain is followed
+	if route.Model != "gpt-4o" {
+		t.Errorf("expected upstream model 'gpt-4o' (from leaf), got '%s'", route.Model)
+	}
+	// Type should be from alias (overrides leaf)
 	if route.OutputProtocol != "anthropic" {
 		t.Errorf("expected output protocol 'anthropic', got '%s'", route.OutputProtocol)
 	}

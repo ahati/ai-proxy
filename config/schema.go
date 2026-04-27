@@ -332,4 +332,9 @@ type Schema struct {
 	WebSearch types.WebSearchConfig `json:"websearch"`
 	// MemoryLogs defines the in-memory request logging configuration.
 	MemoryLogs MemoryLogsConfig `json:"memoryLogs"`
+	// RecursiveModelResolution enables recursive model chain resolution.
+	// When true, Model field can reference another model key, with properties
+	// merged along the chain (alias overrides base). When false, only single-level
+	// resolution is performed. Default: false.
+	RecursiveModelResolution bool `json:"recursive_model_resolution,omitempty"`
 }

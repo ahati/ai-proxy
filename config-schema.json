@@ -319,6 +319,11 @@
         }
       }
     },
+    "recursive_model_resolution": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable recursive model chain resolution. When true, the Model field can reference another model key, with properties merged along the chain (alias overrides base). When false, only single-level resolution is performed."
+    },
     "$schema": {
       "type": "string",
       "format": "uri-reference",

@@ -70,9 +70,9 @@ func NewRouter(s *config.Schema) (Router, error) {
 }
 
 // Resolve resolves a model name to a route with provider information.
-// It first checks for an exact model match in the schema, following recursive
-// model references (when Model field matches another key in Models) and merging
-// properties along the chain. Alias properties override base properties.
+// It first checks for an exact model match in the schema. If RecursiveModelResolution
+// is enabled, it follows recursive model references (when Model field matches
+// another key in Models) and merges properties along the chain. Alias properties override base properties.
 // If not found and fallback is enabled, it uses the fallback configuration.
 // Returns an error if the model is unknown and no fallback is available.
 //
@@ -80,11 +80,24 @@ func NewRouter(s *config.Schema) (Router, error) {
 // @post returned OutputProtocol is determined by merged modelConfig.Type, fallback.Type, or provider's default
 // @post IsPassthrough is false when returned (use ResolveWithProtocol for passthrough detection)
 func (r *router) Resolve(modelName string) (*ResolvedRoute, error) {
-	// Check for exact model match with recursive resolution
+	// Check for exact model match. If RecursiveModelResolution is enabled,
+	// follows model chain recursively and merges properties. Otherwise,
+	// uses single-level resolution.
 	if modelConfig, ok := r.schema.Models[modelName]; ok {
-		merged, upstreamModel, err := r.resolveModelChain(modelName, modelConfig)
-		if err != nil {
-			return nil, err
+		var merged config.ModelConfig
+		var upstreamModel string
+		var err error
+
+		if r.schema.RecursiveModelResolution {
+			// Recursive resolution: follow model chain and merge properties
+			merged, upstreamModel, err = r.resolveModelChain(modelName, modelConfig)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			// Single-level resolution: use config directly
+			merged = modelConfig
+			upstreamModel = modelConfig.Model
 		}
 
 		provider, ok := r.providersMap[merged.Provider]
