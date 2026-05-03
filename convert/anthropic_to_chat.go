@@ -3,6 +3,7 @@ package convert
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"ai-proxy/types"
 )
@@ -64,65 +65,87 @@ func TransformAnthropicToChat(body []byte) ([]byte, error) {
 // Anthropic → OpenAI Chat — Internal helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ToolResultInfo holds extracted tool_result data for creating OpenAI tool messages.
+type ToolResultInfo struct {
+	ToolUseID string
+	Content   string
+}
+
 // convertAnthropicMessagesToOpenAI transforms a slice of Anthropic messages to
-// OpenAI format.
+// OpenAI format. A single Anthropic message with multiple tool_result blocks
+// expands to multiple OpenAI tool messages.
 func convertAnthropicMessagesToOpenAI(anthMsgs []types.MessageInput) []types.Message {
 	openMsgs := make([]types.Message, 0, len(anthMsgs))
 	for _, anthMsg := range anthMsgs {
-		openMsgs = append(openMsgs, convertAnthropicMessageToOpenAI(anthMsg))
+		openMsgs = append(openMsgs, convertAnthropicMessageToOpenAI(anthMsg)...)
 	}
 	return openMsgs
 }
 
 // convertAnthropicMessageToOpenAI transforms a single Anthropic message to
-// OpenAI format.
-func convertAnthropicMessageToOpenAI(anthMsg types.MessageInput) types.Message {
-	openMsg := types.Message{Role: anthMsg.Role}
-
+// OpenAI format. Returns a slice because a single Anthropic user message with
+// multiple tool_result blocks must become multiple OpenAI tool messages.
+func convertAnthropicMessageToOpenAI(anthMsg types.MessageInput) []types.Message {
 	switch content := anthMsg.Content.(type) {
 	case string:
-		openMsg.Content = content
+		return []types.Message{{Role: anthMsg.Role, Content: content}}
 	case []interface{}:
-		openMsg.Content, openMsg.ToolCalls, openMsg.ToolCallID, openMsg.ReasoningContent = convertAnthropicContentBlocksToOpenAI(content)
-		// Only pure tool_result turns can be represented as OpenAI tool messages.
-		if openMsg.ToolCallID != "" && isPureAnthropicToolResultTurn(content) {
-			openMsg.Role = "tool"
+		textContent, toolCalls, reasoning, toolResults := convertAnthropicContentBlocksToOpenAI(content)
+
+		msgs := make([]types.Message, 0, 1+len(toolResults))
+
+		// When a user message contains tool_results, emit tool messages FIRST.
+		// OpenAI requires tool messages to immediately follow the assistant
+		// message that contains tool_calls, so they must precede any text.
+		if anthMsg.Role == "user" {
+			for _, tr := range toolResults {
+				msgs = append(msgs, types.Message{
+					Role:       "tool",
+					ToolCallID: tr.ToolUseID,
+					Content:    tr.Content,
+				})
+			}
 		}
-	}
 
-	return openMsg
-}
-
-// isPureAnthropicToolResultTurn checks if all blocks in a content array are
-// tool_result blocks.
-func isPureAnthropicToolResultTurn(blocks []interface{}) bool {
-	if len(blocks) == 0 {
-		return false
-	}
-
-	for _, item := range blocks {
-		block, ok := item.(map[string]interface{})
-		if !ok {
-			return false
+		// Create the original role message if there's any non-tool_result content
+		if textContent != "" || len(toolCalls) > 0 || reasoning != nil {
+			msgs = append(msgs, types.Message{
+				Role:             anthMsg.Role,
+				Content:          textContent,
+				ToolCalls:        toolCalls,
+				ReasoningContent: reasoning,
+			})
 		}
-		blockType, _ := block["type"].(string)
-		if blockType != "tool_result" {
-			return false
-		}
-	}
 
-	return true
+		// For non-user roles (e.g. assistant), tool_results go after
+		if anthMsg.Role != "user" {
+			for _, tr := range toolResults {
+				msgs = append(msgs, types.Message{
+					Role:       "tool",
+					ToolCallID: tr.ToolUseID,
+					Content:    tr.Content,
+				})
+			}
+		}
+
+		return msgs
+	default:
+		return []types.Message{{Role: anthMsg.Role}}
+	}
 }
 
 // convertAnthropicContentBlocksToOpenAI extracts text content, tool calls,
-// tool result IDs, and reasoning content from Anthropic content blocks.
-// Returns reasoning content as *string (nil if no thinking blocks, pointer
-// to concatenated text otherwise).
-func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (interface{}, []types.ToolCall, string, *string) {
+// reasoning content, and tool_result info from Anthropic content blocks.
+// Returns:
+//   - textContent: concatenated text from text blocks
+//   - toolCalls: tool_use blocks converted to OpenAI format
+//   - reasoning: thinking blocks concatenated (nil if none)
+//   - toolResults: tool_result blocks as ToolResultInfo slice
+func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (string, []types.ToolCall, *string, []ToolResultInfo) {
 	var textContent string
 	var toolCalls []types.ToolCall
-	var toolCallID string
 	var thinkingText string
+	var toolResults []ToolResultInfo
 
 	for _, item := range blocks {
 		m, ok := item.(map[string]interface{})
@@ -160,31 +183,35 @@ func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (interface{}, [
 				}
 			}
 		case "tool_result":
-			if id, ok := m["tool_use_id"].(string); ok {
-				toolCallID = id
+			toolUseID, _ := m["tool_use_id"].(string)
+			if toolUseID == "" {
+				continue
 			}
+			var resultContent string
 			if content, ok := m["content"]; ok {
 				switch c := content.(type) {
 				case string:
-					if textContent != "" {
-						textContent += "\n"
-					}
-					textContent += c
+					resultContent = c
 				case []interface{}:
+					var textParts []string
 					for _, block := range c {
-						if blockMap, ok := block.(map[string]interface{}); ok {
-							if blockType, ok := blockMap["type"].(string); ok && blockType == "text" {
-								if t, ok := blockMap["text"].(string); ok {
-									if textContent != "" {
-										textContent += "\n"
-									}
-									textContent += t
+						if bm, ok := block.(map[string]interface{}); ok {
+							if bm["type"] == "text" {
+								if t, ok := bm["text"].(string); ok && t != "" {
+									textParts = append(textParts, t)
 								}
 							}
 						}
 					}
+					if len(textParts) > 0 {
+						resultContent = strings.Join(textParts, "\n")
+					}
 				}
 			}
+			toolResults = append(toolResults, ToolResultInfo{
+				ToolUseID: toolUseID,
+				Content:   resultContent,
+			})
 		}
 	}
 
@@ -192,7 +219,7 @@ func convertAnthropicContentBlocksToOpenAI(blocks []interface{}) (interface{}, [
 	if thinkingText != "" {
 		reasoning = &thinkingText
 	}
-	return textContent, toolCalls, toolCallID, reasoning
+	return textContent, toolCalls, reasoning, toolResults
 }
 
 // ConvertAnthropicToolsToOpenAI transforms Anthropic tool definitions to OpenAI
