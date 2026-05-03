@@ -26,9 +26,9 @@ func TransformResponsesToAnthropicWithOptions(body []byte, ctx context.Context, 
 		return nil, err
 	}
 
-	// Fetch conversation history chain if previous_response_id is provided and store is true
-	// In ZDR mode (store:false), we skip the DB chain walk
-	if openReq.PreviousResponseID != "" && shouldStore {
+	// Fetch conversation history chain if previous_response_id is provided.
+	// Always walk the chain regardless of store flag — needed for bridge operation.
+	if openReq.PreviousResponseID != "" {
 		// TODO: Wire userID from request headers for proper ownership validation
 		chain, err := conversation.WalkChainFromDefaultWithOwnership(openReq.PreviousResponseID, "")
 		if err != nil {

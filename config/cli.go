@@ -20,6 +20,7 @@ type CLIFlags struct {
 	Port                  string
 	ConversationStoreSize int
 	ConversationStoreTTL  string
+	UpstreamTimeout       string
 }
 
 // ParseFlags parses CLI flags and returns the parsed flags.
@@ -35,6 +36,7 @@ func ParseFlags() (CLIFlags, error) {
 	port := flag.String("port", "", "Server port (default: 8080)")
 	conversationStoreSize := flag.Int("conversation-store-size", 0, "Max conversations in memory (default: 1000)")
 	conversationStoreTTL := flag.String("conversation-store-ttl", "", "Conversation TTL duration (default: 24h)")
+	upstreamTimeout := flag.String("upstream-timeout", "", "Upstream request timeout duration (default: 120s)")
 
 	flag.Parse()
 
@@ -43,6 +45,7 @@ func ParseFlags() (CLIFlags, error) {
 		Port:                  *port,
 		ConversationStoreSize: *conversationStoreSize,
 		ConversationStoreTTL:  *conversationStoreTTL,
+		UpstreamTimeout:       *upstreamTimeout,
 	}
 
 	// Priority 1: explicit --config-file flag

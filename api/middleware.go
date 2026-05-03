@@ -49,8 +49,10 @@ func isUIPath(path string) bool {
 // The capture flow is:
 //  1. Create capture context before request processing
 //  2. Attach capture context to request context for downstream access
-//  3. Process request (handlers can access and populate capture context)
-//  4. After request completes, asynchronously write captured data to storage
+//  3. Record downstream request headers (API handlers overwrite with full body)
+//  4. Check for WebSocket upgrade — if detected, skip capture (WS handles its own)
+//  5. Process request (handlers can access and populate capture context)
+//  6. After request completes, asynchronously write captured data to storage
 //
 // @return Gin middleware function that captures request/response data.
 //
@@ -60,13 +62,14 @@ func isUIPath(path string) bool {
 // @note Asynchronous write ensures request latency is not affected by disk I/O.
 // @note If m.storage is nil, capture is disabled and no data is written.
 // @note Requests to /ui/* paths are excluded from in-memory logging.
+// @note WebSocket connections handle their own capture per-turn and skip this path.
 func (m *CaptureMiddleware) Handler() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Create capture context to hold all request/response data
 		cc := capture.NewCaptureContext(c.Request)
 
-		// Attach capture context to request context so handlers can access it
-		// This enables downstream code to populate capture data
+		// Attach capture context to request context so handlers can access it.
+		// This enables downstream code to populate capture data.
 		ctx := capture.WithCaptureContext(c.Request.Context(), cc)
 
 		// Record the downstream request so non-API routes (e.g. /api/ui/logs)
@@ -75,13 +78,20 @@ func (m *CaptureMiddleware) Handler() gin.HandlerFunc {
 		cc.Recorder.RecordDownstreamRequest(c.Request.Header, nil)
 		c.Request = c.Request.WithContext(ctx)
 
-		// Capture the request path synchronously before c.Next() and goroutines.
-		// After c.Next() returns, Gin may recycle the context, making c.Request
-		// unsafe to access from the goroutine.
+		// Capture values synchronously before c.Next() because Gin recycles
+		// the context after the handler returns, making c.Request unsafe to
+		// access from the goroutine.
 		requestPath := c.Request.URL.Path
+		isWS := strings.EqualFold(c.GetHeader("Upgrade"), "websocket")
 
-		// Process the request - control returns here after handler completes
+		// Process the request — control returns here after handler completes
 		c.Next()
+
+		// WebSocket connections handle their own capture per-turn within
+		// the connection lifecycle, so skip the standard capture path.
+		if isWS {
+			return
+		}
 
 		// Write captured data asynchronously to avoid blocking the response.
 		// Goroutine is safe because capture context is self-contained and
@@ -114,12 +124,12 @@ func (m *CaptureMiddleware) Handler() gin.HandlerFunc {
 // @post If baseDir is non-empty, storage is initialized and ready for writes.
 // @note Caller is responsible for ensuring directory exists or is creatable.
 func InitStorage(baseDir string) *capture.Storage {
-	// Only create storage if a directory is specified
-	// Empty directory string indicates capture should be disabled
+	// Only create storage if a directory is specified.
+	// Empty directory string indicates capture should be disabled.
 	if baseDir != "" {
 		return capture.NewStorage(baseDir)
 	}
-	// Return nil to signal that capture is disabled
-	// Middleware checks for nil storage before attempting writes
+	// Return nil to signal that capture is disabled.
+	// Middleware checks for nil storage before attempting writes.
 	return nil
 }

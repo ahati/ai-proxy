@@ -29,6 +29,7 @@ func TestResponseGetHandler_Handle_Success(t *testing.T) {
 
 	testConv := &conversation.Conversation{
 		ID:        "resp_test123",
+		Persisted: true,
 		Input:     []types.InputItem{{Type: "message", Role: "user", Content: "Hello"}},
 		Output:    []types.OutputItem{{Type: "message", Role: "assistant", Content: []types.OutputContent{{Type: "output_text", Text: "Hi there!"}}}},
 		CreatedAt: time.Now(),
@@ -102,6 +103,7 @@ func TestResponseInputItemsHandler_Handle_Success(t *testing.T) {
 	}
 	testConv := &conversation.Conversation{
 		ID:        "resp_input_test",
+		Persisted: true,
 		Input:     testInput,
 		Output:    []types.OutputItem{},
 		CreatedAt: time.Now(),
@@ -153,6 +155,7 @@ func TestResponseInputItemsHandler_Handle_ListFormat(t *testing.T) {
 
 	testConv := &conversation.Conversation{
 		ID:        "resp_list_test",
+		Persisted: true,
 		Input:     []types.InputItem{},
 		Output:    []types.OutputItem{},
 		CreatedAt: time.Now(),

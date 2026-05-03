@@ -280,6 +280,9 @@ func (t *OpenAITransformer) Close() error {
 // Initialize is called before the upstream request to perform any setup.
 // For OpenAITransformer, this is a no-op as initialization happens on first event.
 func (t *OpenAITransformer) Initialize() error {
+	if sseReceiver, ok := t.receiver.(transform.SSETransformer); ok {
+		return sseReceiver.Initialize()
+	}
 	return nil
 }
 

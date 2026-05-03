@@ -210,6 +210,77 @@ enabled = false
 | POST | `/v1/chat/completions` | OpenAI-compatible chat completions |
 | POST | `/v1/messages` | Anthropic Messages API |
 | POST | `/v1/responses` | OpenAI Responses API |
+| GET | `/v1/responses` | OpenAI Responses API (WebSocket upgrade) |
+
+## WebSocket Responses API Bridge
+
+The proxy supports the [OpenAI Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode), enabling long-running, tool-call-heavy agent workflows with lower latency than HTTP polling. Instead of making separate HTTP requests per turn, clients (like Codex) open a single WebSocket connection and exchange JSON messages for the entire conversation.
+
+### How It Works
+
+```
+┌──────────┐  WS Upgrade GET /v1/responses    ┌──────────┐  HTTP POST /v1/chat/completions   ┌──────────┐
+│  Client  │ ───────────────────────────────► │  Proxy   │ ────────────────────────────────► │ Upstream │
+│ (Codex)  │ ◄─────────────────────────────── │ (Bridge) │ ◄──────────────────────────────── │   LLM    │
+└──────────┘  Raw JSON WS messages            └──────────┘  SSE stream                       └──────────┘
+```
+
+1. Client opens a WebSocket connection via `GET /v1/responses` with `Upgrade: websocket`
+2. Client sends `response.create` JSON events (one per turn)
+3. Proxy converts each event to an upstream HTTP/SSE request
+4. Proxy streams SSE responses back as raw JSON WebSocket messages
+5. Only the delta input is sent per turn — the proxy maintains full conversation history in-memory and reconstructs context for upstream REST calls
+6. Conversation state persists in the conversation store for cross-session resume (`previous_response_id`)
+
+### Key Behaviors
+
+| Feature | Description |
+|---------|-------------|
+| **In-memory history** | Each WS connection accumulates conversation turns in-memory, eliminating repeated chain walks for within-connection multi-turn |
+| **Cross-connection resume** | When a new connection provides `previous_response_id`, the proxy walks the conversation store chain to reconstruct full history |
+| **`store` flag semantics** | `store: true` persists conversations in the Responses CRUD endpoints (`/v1/responses/:id`). `store: false` keeps conversations for bridge operation only — they are cleaned up when the WS connection closes |
+| **Warmup** | `generate: false` requests return a synthetic response ID locally without hitting the upstream |
+| **Connection lifecycle** | 60-minute max duration, 120s read deadline, 30s write deadline. Non-persisted conversations cleaned on close |
+| **Capture** | Each turn is recorded in the in-memory log store (`/ui/api/logs`) with unique per-turn request IDs |
+
+### Message Flow
+
+```
+Turn 1: Client → {type: "response.create", input: [msg1], store: false}
+        Proxy  → upstream HTTP request with [msg1]
+        Proxy  → Client {type: "response.created", ...}
+                  {type: "response.output_item.added", item: {type: "message", ...}}
+                  {type: "response.output_text.delta", delta: "..."}
+                  {type: "response.completed", ...}
+        Proxy  → accumulates msg1 + assistant response in history
+
+Turn 2: Client → {type: "response.create", input: [msg2], store: false}
+        Proxy  → prepends Turn 1 history → upstream gets [msg1, assistant1, msg2]
+        Proxy  → Client {type: "response.created", ...} ...
+```
+
+### Usage with Codex
+
+Codex's `unified_exec` feature uses this WebSocket bridge automatically when connecting to a Responses API endpoint:
+
+```toml
+# .codex/config.toml
+model = "glm-5"
+openai_base_url = "http://localhost:8080/v1"
+model_provider = "openai"
+
+[features]
+unified_exec = true
+```
+
+Multi-turn conversations work seamlessly — `codex exec resume --last` opens a new WebSocket connection with `previous_response_id`, and the proxy reconstructs the full conversation history from the store.
+
+### Architecture Notes
+
+- **One conversation per WS session**: The `Connection` struct holds a growing `[]InputItem` history slice. Within-connection turns prepend this history directly — no store lookups needed.
+- **Store as fallback**: The conversation store (`conversation.DefaultStore`) provides history for cross-connection resume and persists conversations marked with `store: true`.
+- **Pipeline integration**: The WS bridge reuses the same `BuildRequestPipeline` / `BuildPipeline` as HTTP handlers. The only difference is the output writer: `wsMessageWriter` sends raw JSON instead of SSE text.
+- **Per-turn capture**: Each turn generates a unique UUID for the in-memory log store, visible at `/ui/api/logs`.
 
 ## Web Search Tool
 

@@ -41,7 +41,7 @@ func (h *ResponseGetHandler) Handle(c *gin.Context) {
 
 	// Look up the conversation
 	conv := conversation.GetFromDefault(id)
-	if conv == nil {
+	if conv == nil || !conv.Persisted {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": gin.H{
 				"code":    "response_not_found",
@@ -107,7 +107,7 @@ func (h *ResponseInputItemsHandler) Handle(c *gin.Context) {
 
 	// Look up the conversation
 	conv := conversation.GetFromDefault(id)
-	if conv == nil {
+	if conv == nil || !conv.Persisted {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": gin.H{
 				"code":    "response_not_found",

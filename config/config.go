@@ -32,6 +32,10 @@ type Config struct {
 	// ConversationStoreTTL is the time-to-live for stored conversations.
 	// Default: 24 hours. Conversations older than this are automatically removed.
 	ConversationStoreTTL time.Duration
+	// UpstreamTimeout is the maximum duration for upstream HTTP requests.
+	// Default: 120s. Applies to each upstream API call made by the proxy.
+	// Set via --upstream-timeout flag or UPSTREAM_TIMEOUT environment variable.
+	UpstreamTimeout time.Duration
 }
 
 // Load reads configuration from command-line flags, environment variables, and JSON config file.
@@ -53,6 +57,7 @@ func Load() *Config {
 			SSELogDir:             getEnvOrFlag("SSELOG_DIR", "", ""),
 			ConversationStoreSize: parseConversationStoreSize(flags.ConversationStoreSize),
 			ConversationStoreTTL:  parseConversationStoreTTL(flags.ConversationStoreTTL),
+			UpstreamTimeout:       parseUpstreamTimeout(getEnvOrFlag("UPSTREAM_TIMEOUT", flags.UpstreamTimeout, "120s")),
 		}
 	}
 
@@ -68,6 +73,7 @@ func Load() *Config {
 			ConfigFile:            flags.ConfigFile,
 			ConversationStoreSize: parseConversationStoreSize(flags.ConversationStoreSize),
 			ConversationStoreTTL:  parseConversationStoreTTL(flags.ConversationStoreTTL),
+			UpstreamTimeout:       parseUpstreamTimeout(getEnvOrFlag("UPSTREAM_TIMEOUT", flags.UpstreamTimeout, "120s")),
 		}
 	}
 
@@ -79,6 +85,7 @@ func Load() *Config {
 		AppConfig:             appConfig,
 		ConversationStoreSize: parseConversationStoreSize(flags.ConversationStoreSize),
 		ConversationStoreTTL:  parseConversationStoreTTL(flags.ConversationStoreTTL),
+		UpstreamTimeout:       parseUpstreamTimeout(getEnvOrFlag("UPSTREAM_TIMEOUT", flags.UpstreamTimeout, "120s")),
 	}
 }
 
@@ -132,4 +139,20 @@ func parseConversationStoreTTL(ttlStr string) time.Duration {
 		return 24 * time.Hour
 	}
 	return ttl
+}
+
+// parseUpstreamTimeout parses the upstream request timeout duration string.
+// If the string is empty or invalid, returns the default of 120 seconds.
+//
+// @param timeoutStr - duration string (e.g. "120s", "2m", "5m")
+// @return time.Duration - parsed timeout, or 120s if parsing fails
+func parseUpstreamTimeout(timeoutStr string) time.Duration {
+	if timeoutStr == "" {
+		return 120 * time.Second
+	}
+	d, err := time.ParseDuration(timeoutStr)
+	if err != nil {
+		return 120 * time.Second
+	}
+	return d
 }

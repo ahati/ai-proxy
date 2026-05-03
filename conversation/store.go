@@ -31,6 +31,11 @@ type Conversation struct {
 	// EncryptedReasoning stores the encrypted blob in ZDR mode.
 	// When store:false, this contains the encrypted reasoning data.
 	EncryptedReasoning string
+	// Persisted indicates whether this conversation should be visible via
+	// the Responses API CRUD endpoints. Controlled by the OpenAI `store` flag.
+	// When false (store:false), the conversation is kept only for bridge
+	// operation and is cleaned up when the WebSocket connection closes.
+	Persisted bool
 	// UserID is the owner of this conversation.
 	// Used for access control to prevent cross-user access.
 	UserID string
@@ -290,4 +295,13 @@ func StoreInDefault(conv *Conversation) {
 		return
 	}
 	DefaultStore.Store(conv)
+}
+
+// DeleteFromDefault removes a conversation from the default store by ID.
+// Does nothing if the default store is not initialized or the ID is empty.
+func DeleteFromDefault(id string) {
+	if DefaultStore == nil || id == "" {
+		return
+	}
+	DefaultStore.Delete(id)
 }

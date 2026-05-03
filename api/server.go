@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"ai-proxy/api/handlers"
+	"ai-proxy/api/websocket"
 	"ai-proxy/config"
 	"ai-proxy/router"
 	"ai-proxy/ui"
@@ -39,6 +40,9 @@ type Server struct {
 
 	// mcpHandler is the optional MCP endpoint handler for tool discovery and invocation.
 	mcpHandler http.Handler
+
+	// wsHandler is the WebSocket handler for the Responses API.
+	wsHandler *websocket.Handler
 }
 
 // NewServer creates and initializes a new Server instance with the given configuration.
@@ -68,6 +72,9 @@ func NewServer(cfg *config.Config, manager *config.ConfigManager, middleware ...
 		config:  cfg,
 		manager: manager,
 	}
+
+	// Initialize WebSocket handler
+	s.wsHandler = websocket.NewHandler(cfg, manager)
 
 	// Apply middleware first so it runs before routes
 	for _, m := range middleware {
@@ -118,14 +125,24 @@ func (s *Server) setupRoutes() {
 
 	// Responses endpoint - unified OpenAI Responses API endpoint that routes to the
 	// appropriate provider based on model configuration.
+	// Supports both HTTP POST and WebSocket connections.
+	// WebSocket mode is used when the client sends an Upgrade header.
+	//
+	// IMPORTANT: Register exact path routes BEFORE wildcard routes to avoid conflicts.
+	// Gin matches routes in registration order, and wildcards (:id) would match
+	// exact paths if registered first.
 	if s.manager != nil {
 		snap := s.manager.Get()
 		if snap != nil && snap.Schema != nil {
+			// Register POST for HTTP requests
 			s.router.POST("/v1/responses", handlers.NewResponsesHandler(s.config, s.manager))
+			// Register GET for WebSocket upgrade requests (must be before :id routes)
+			s.router.GET("/v1/responses", s.wsHandler.Handle)
 		}
 	}
 
 	// Responses CRUD endpoints - for managing stored conversations
+	// These use wildcard :id parameter, registered AFTER exact /v1/responses
 	s.router.GET("/v1/responses/:id", handlers.NewResponseGetHandler())
 	s.router.DELETE("/v1/responses/:id", handlers.NewResponseDeleteHandler())
 	s.router.GET("/v1/responses/:id/input_items", handlers.NewResponseInputItemsHandler())

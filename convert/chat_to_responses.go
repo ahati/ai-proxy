@@ -268,6 +268,7 @@ type ChatToResponsesTransformer struct {
 	summaryIndex         int
 
 	messageStarted bool // track if message item has been emitted
+	messageID   string // ID of the current message output item
 	completed      bool // track if response.completed has been emitted
 	doneWritten    bool // track if [DONE] terminator has been emitted
 	toolCalls      []map[string]interface{}
@@ -526,6 +527,9 @@ func (t *ChatToResponsesTransformer) emitTextDelta(text string) error {
 	event := map[string]interface{}{
 		"type":            "response.output_text.delta",
 		"sequence_number": t.nextSeq(),
+		"output_index":    t.contentIndex,
+		"content_index":   0,
+		"item_id":         t.messageID,
 		"delta":           text,
 	}
 	return t.writeEvent(event)
@@ -606,11 +610,6 @@ func (t *ChatToResponsesTransformer) finalizeReasoning() error {
 }
 
 func (t *ChatToResponsesTransformer) emitReasoningDelta(text string) error {
-	// Mark that we've started emitting content
-	if !t.messageStarted {
-		t.messageStarted = true
-	}
-
 	if !t.inReasoning {
 		t.inReasoning = true
 		t.reasoningOutputIndex = t.contentIndex
@@ -623,6 +622,7 @@ func (t *ChatToResponsesTransformer) emitReasoningDelta(text string) error {
 			"type":            "response.output_item.added",
 			"sequence_number": t.nextSeq(),
 			"output_index":    t.reasoningOutputIndex,
+			"item_id":         t.reasoningID,
 			"item": map[string]interface{}{
 				"type":    "reasoning",
 				"id":      t.reasoningID,
@@ -665,6 +665,7 @@ func (t *ChatToResponsesTransformer) emitReasoningDelta(text string) error {
 
 func (t *ChatToResponsesTransformer) emitMessageItemAdded() error {
 	messageID := fmt.Sprintf("msg_%s", t.responseID[5:])
+	t.messageID = messageID
 	outputIndex := 0
 	// If reasoning was emitted, message comes after it
 	if t.reasoningID != "" {
@@ -676,6 +677,7 @@ func (t *ChatToResponsesTransformer) emitMessageItemAdded() error {
 		"type":            "response.output_item.added",
 		"sequence_number": t.nextSeq(),
 		"output_index":    outputIndex,
+		"item_id":         messageID,
 		"item": map[string]interface{}{
 			"type":    "message",
 			"id":      messageID,
@@ -692,6 +694,8 @@ func (t *ChatToResponsesTransformer) emitContentPartAdded() error {
 		"type":            "response.content_part.added",
 		"sequence_number": t.nextSeq(),
 		"output_index":    t.contentIndex,
+		"content_index":   0,
+		"item_id":         t.messageID,
 		"part": map[string]interface{}{
 			"type": "output_text",
 			"text": "",
@@ -948,14 +952,9 @@ func (t *ChatToResponsesTransformer) handleFinish() error {
 
 // storeConversation saves the conversation to the default store for previous_response_id support.
 // This enables multi-turn conversations without re-sending the entire history.
-// Storage is skipped if shouldStore is false (ZDR mode).
+// Conversations are always stored for bridge operation. The shouldStore flag controls
+// only the Persisted field, which determines CRUD endpoint visibility and cleanup.
 func (t *ChatToResponsesTransformer) storeConversation(outputItems []map[string]interface{}) {
-	// Skip storage if disabled (ZDR mode)
-	if !t.shouldStore {
-		logging.DebugMsg("[%s] Skipping conversation storage (store:false)", t.responseID)
-		return
-	}
-
 	// Only store if we have a response ID and the store is initialized
 	if t.responseID == "" {
 		return
@@ -979,6 +978,7 @@ func (t *ChatToResponsesTransformer) storeConversation(outputItems []map[string]
 	conv := &conversation.Conversation{
 		ID:                 t.responseID,
 		PreviousResponseID: t.previousResponseID,
+		Persisted:          t.shouldStore,
 		UserID:             t.userID,
 		Input:              t.inputItems,
 		Output:             outputs,

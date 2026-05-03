@@ -63,9 +63,11 @@ func (c *ResponsesToChatConverter) Convert(body []byte) ([]byte, error) {
 func (c *ResponsesToChatConverter) convertRequest(req *types.ResponsesRequest) *types.ChatCompletionRequest {
 	var reasoningItemID string
 
-	// Fetch conversation history chain if previous_response_id is provided and store is true
-	// In ZDR mode (store:false), we skip the DB chain walk and rely on encrypted_reasoning
-	if req.PreviousResponseID != "" && c.shouldStore {
+	// Fetch conversation history chain if previous_response_id is provided.
+	// We always walk the chain regardless of the store flag — the lookup is
+	// needed for cross-connection resume even when this particular response
+	// won't be persisted (store:false).
+	if req.PreviousResponseID != "" {
 		// TODO: Wire userID from request headers for proper ownership validation
 		chain, err := conversation.WalkChainFromDefaultWithOwnership(req.PreviousResponseID, "")
 		if err != nil {

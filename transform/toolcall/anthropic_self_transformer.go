@@ -585,6 +585,9 @@ func (t *AnthropicTransformer) Close() error {
 }
 
 func (t *AnthropicTransformer) Initialize() error {
+	if sseReceiver, ok := t.receiver.(transform.SSETransformer); ok {
+		return sseReceiver.Initialize()
+	}
 	return nil
 }
 

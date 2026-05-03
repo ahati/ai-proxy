@@ -324,6 +324,12 @@
       "default": false,
       "description": "Enable recursive model chain resolution. When true, the Model field can reference another model key, with properties merged along the chain (alias overrides base). When false, only single-level resolution is performed."
     },
+    "upstream_timeout": {
+      "type": "string",
+      "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|μs|ms|s|m|h)$",
+      "default": "120s",
+      "description": "Maximum duration for upstream HTTP requests (e.g. '120s', '5m', '2m30s'). Applies to each upstream API call made by the proxy. Minimum 1s, maximum 10m. Set via --upstream-timeout CLI flag or UPSTREAM_TIMEOUT env var."
+    },
     "mcp": {
       "type": "object",
       "description": "MCP (Model Context Protocol) server endpoint configuration.",

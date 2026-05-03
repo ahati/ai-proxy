@@ -1038,15 +1038,9 @@ func (t *ResponsesTransformer) emitCompletion() error {
 }
 
 // storeConversation saves the conversation to the default store for previous_response_id support.
-// This enables multi-turn conversations without re-sending the entire history.
-// Storage is skipped if shouldStore is false (ZDR mode).
+// Conversations are always stored for bridge operation. The shouldStore flag controls
+// only the Persisted field, which determines CRUD endpoint visibility and cleanup.
 func (t *ResponsesTransformer) storeConversation() {
-	// Skip storage if disabled (ZDR mode)
-	if !t.shouldStore {
-		logging.DebugMsg("[%s] Skipping conversation storage (store:false)", t.responseID)
-		return
-	}
-
 	// Only store if we have a response ID and the store is initialized
 	if t.responseID == "" {
 		return
@@ -1070,6 +1064,7 @@ func (t *ResponsesTransformer) storeConversation() {
 	conv := &conversation.Conversation{
 		ID:                 t.responseID,
 		PreviousResponseID: t.previousResponseID,
+		Persisted:          t.shouldStore,
 		UserID:             t.userID,
 		Input:              t.inputItems,
 		Output:             outputItems,

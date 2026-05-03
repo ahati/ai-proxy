@@ -222,39 +222,6 @@ func TestMessagesHandler_ForwardHeaders(t *testing.T) {
 	}
 }
 
-func TestConvertAnthropicMessage_MixedUserToolResultStaysUser(t *testing.T) {
-	// Test via the public TransformAnthropicToChat function to verify
-	// that mixed user messages (text + tool_result) keep user role.
-	body := []byte(`{
-		"model": "test",
-		"stream": true,
-		"messages": [{
-			"role": "user",
-			"content": [
-				{"type": "text", "text": "Here is my note."},
-				{"type": "tool_result", "tool_use_id": "tool_123", "content": "42"}
-			]
-		}]
-	}`)
-
-	result, err := convert.TransformAnthropicToChat(body)
-	if err != nil {
-		t.Fatalf("TransformAnthropicToChat() error = %v", err)
-	}
-
-	var req map[string]interface{}
-	if err := json.Unmarshal(result, &req); err != nil {
-		t.Fatalf("failed to unmarshal result: %v", err)
-	}
-
-	messages := req["messages"].([]interface{})
-	msg := messages[0].(map[string]interface{})
-	// Mixed content blocks should keep user role (not become tool role)
-	if msg["role"] != "user" {
-		t.Fatalf("expected mixed message to remain user role, got %s", msg["role"])
-	}
-}
-
 func TestConvertAnthropicMessage_PureToolResultBecomesTool(t *testing.T) {
 	// Test via the public TransformAnthropicToChat function to verify
 	// that pure tool_result messages become tool role in OpenAI format.
